@@ -1,0 +1,9 @@
+venv/
+__MACOSX/
+*.zip
+sensing_cache.pkl
+models/unified_burnout_dataset.csv
+ScreenTime vs MentalWellness.csv
+student life/
+*.pyc
+.DS_Store
