@@ -10,15 +10,17 @@ class PredictionScreen extends StatefulWidget {
 }
 
 class _PredictionScreenState extends State<PredictionScreen> {
-  // Change this URL depending on where you run the backend:
-  // Android emulator: 10.0.2.2
-  // Web/Desktop: 127.0.0.1
-  // Real phone: your laptop IP like 192.168.x.x
+  // Android emulator
   final String apiUrl = 'http://10.0.2.2:8000/predict';
+
+  // For laptop/web use:
+  // final String apiUrl = 'http://127.0.0.1:8000/predict';
+
+  // For real phone use:
+  // final String apiUrl = 'http://YOUR_PC_IP:8000/predict';
 
   bool isLoading = false;
 
-  // Input values
   double sleepHours = 7;
   double sleepQuality = 3;
   double appSwitchesPerHour = 20;
@@ -69,20 +71,11 @@ class _PredictionScreenState extends State<PredictionScreen> {
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
-        final double predictionValue = (data["prediction"] as num).toDouble();
-
-        String level;
-        if (predictionValue < 3.5) {
-          level = "Low 🟢";
-        } else if (predictionValue < 6.5) {
-          level = "Moderate 🟠";
-        } else {
-          level = "High 🔴";
-        }
 
         setState(() {
-          predictedStress = predictionValue.toStringAsFixed(2);
-          stressLevel = level;
+          predictedStress =
+              double.parse(data["prediction"].toString()).toStringAsFixed(2);
+          stressLevel = data["stress_level"].toString();
         });
       } else {
         setState(() {
@@ -95,7 +88,6 @@ class _PredictionScreenState extends State<PredictionScreen> {
         predictedStress = 'Error';
         stressLevel = e.toString();
       });
-
     } finally {
       setState(() {
         isLoading = false;
@@ -122,6 +114,13 @@ class _PredictionScreenState extends State<PredictionScreen> {
       predictedStress = '--';
       stressLevel = '--';
     });
+  }
+
+  Color getStressColor() {
+    if (stressLevel.contains('Low')) return Colors.green;
+    if (stressLevel.contains('Moderate')) return Colors.orange;
+    if (stressLevel.contains('High')) return Colors.red;
+    return Colors.white;
   }
 
   Widget buildSliderCard({
@@ -341,13 +340,6 @@ class _PredictionScreenState extends State<PredictionScreen> {
     );
   }
 
-  Color getStressColor() {
-    if (stressLevel.contains('Low')) return Colors.green;
-    if (stressLevel.contains('Moderate')) return Colors.orange;
-    if (stressLevel.contains('High')) return Colors.red;
-    return Colors.white;
-  }
-
   Widget buildRightPanel() {
     return Column(
       children: [
@@ -417,7 +409,7 @@ class _PredictionScreenState extends State<PredictionScreen> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               const Text(
-                'Predicted stress score',
+                'Predicted burnout score',
                 style: TextStyle(
                   color: Colors.white,
                   fontSize: 17,
@@ -445,7 +437,7 @@ class _PredictionScreenState extends State<PredictionScreen> {
               ),
               const SizedBox(height: 18),
               const Text(
-                'Stress level',
+                'Burnout level',
                 style: TextStyle(
                   color: Colors.white,
                   fontSize: 17,
@@ -556,9 +548,9 @@ class _PredictionScreenState extends State<PredictionScreen> {
               return SingleChildScrollView(
                 child: Column(
                   children: [
-                    leftPanel,
+                    buildLeftPanel(),
                     const SizedBox(height: 16),
-                    rightPanel,
+                    buildRightPanel(),
                   ],
                 ),
               );
