@@ -1,17 +1,51 @@
-from fastapi import FastAPI
-from pydantic import BaseModel
+from fastapi import FastAPI, HTTPException, Depends
+from pydantic import BaseModel, EmailStr
+from sqlalchemy.orm import Session
+from passlib.context import CryptContext
 import torch
 import torch.nn as nn
 import pickle
 import joblib
 import numpy as np
 
+from database import Base, engine, SessionLocal
+from models import User
+
 app = FastAPI()
 
+# ----------------------------
+# Create DB tables
+# ----------------------------
+Base.metadata.create_all(bind=engine)
 
 # ----------------------------
-# Input schema for Swagger/API
+# Password hashing (bcrypt)
 # ----------------------------
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+
+# ----------------------------
+# Schemas
+# ----------------------------
+class RegisterInput(BaseModel):
+    name: str
+    email: EmailStr
+    password: str
+
+
+class LoginInput(BaseModel):
+    email: EmailStr
+    password: str
+
+
 class BurnoutInput(BaseModel):
     sleep_hours: float
     sleep_quality: float
@@ -30,7 +64,7 @@ class BurnoutInput(BaseModel):
 
 
 # ----------------------------
-# Model architecture
+# Model Architecture
 # ----------------------------
 class BurnoutModel(nn.Module):
     def __init__(self, n_features: int):
@@ -50,42 +84,102 @@ class BurnoutModel(nn.Module):
 
 
 # ----------------------------
-# Load feature columns
+# Load ML Model
 # ----------------------------
 with open("feature_cols.pkl", "rb") as f:
     feature_cols = pickle.load(f)
 
-print("Feature columns:", feature_cols)
-
-# ----------------------------
-# Load scaler
-# ----------------------------
 scaler = joblib.load("burnout_scaler.pkl")
 
-# ----------------------------
-# Load model weights
-# ----------------------------
 model = BurnoutModel(n_features=len(feature_cols))
+
 state_dict = torch.load(
     "best_burnout_model.pt",
     map_location="cpu",
     weights_only=True
 )
+
 model.load_state_dict(state_dict)
 model.eval()
 
 
+# ----------------------------
+# Routes
+# ----------------------------
 @app.get("/")
 def home():
+    return {"message": "Backend is running"}
+
+
+# ----------------------------
+# Register
+# ----------------------------
+@app.post("/register")
+def register(data: RegisterInput, db: Session = Depends(get_db)):
+    existing_user = db.query(User).filter(User.email == data.email).first()
+    if existing_user:
+        raise HTTPException(status_code=400, detail="Email already registered")
+
+    # bcrypt max limit fix
+    if len(data.password) > 72:
+        raise HTTPException(
+            status_code=400,
+            detail="Password too long (max 72 characters)"
+        )
+
+    safe_password = data.password[:72]
+    hashed_password = pwd_context.hash(safe_password)
+
+    new_user = User(
+        name=data.name,
+        email=data.email,
+        hashed_password=hashed_password
+    )
+
+    db.add(new_user)
+    db.commit()
+    db.refresh(new_user)
+
     return {
-        "message": "Burnout prediction API is running",
-        "expected_features": feature_cols
+        "message": "User registered successfully",
+        "user": {
+            "id": new_user.id,
+            "name": new_user.name,
+            "email": new_user.email
+        }
     }
 
 
+# ----------------------------
+# Login
+# ----------------------------
+@app.post("/login")
+def login(data: LoginInput, db: Session = Depends(get_db)):
+    user = db.query(User).filter(User.email == data.email).first()
+
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+
+    safe_password = data.password[:72]
+
+    if not pwd_context.verify(safe_password, user.hashed_password):
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+
+    return {
+        "message": "Login successful",
+        "user": {
+            "id": user.id,
+            "name": user.name,
+            "email": user.email
+        }
+    }
+
+
+# ----------------------------
+# Prediction
+# ----------------------------
 @app.post("/predict")
 def predict(data: BurnoutInput):
-    # Build row in exact feature order
     row_dict = {
         "sleep_hours": data.sleep_hours,
         "sleep_quality": data.sleep_quality,
@@ -112,7 +206,6 @@ def predict(data: BurnoutInput):
     with torch.no_grad():
         raw_output = model(input_tensor).item()
 
-    # Match notebook behavior: clip to 1-10
     prediction = float(np.clip(raw_output, 1, 10))
 
     if prediction < 4:

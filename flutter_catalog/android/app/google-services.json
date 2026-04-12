@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "934390734160",
+    "project_id": "digitalburnoutdetection",
+    "storage_bucket": "digitalburnoutdetection.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:934390734160:android:54c19a62119ba27142a055",
+        "android_client_info": {
+          "package_name": "com.example.flutter_catalog"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBO-ISlevuBfle4lOAdALulfBICMTtLYtY"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

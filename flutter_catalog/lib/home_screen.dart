@@ -23,7 +23,7 @@ class HomeScreen extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             const Text(
-              'Hello, Divya',
+              'Hello!',
               style: TextStyle(
                 fontSize: 28,
                 fontWeight: FontWeight.w700,
@@ -63,7 +63,7 @@ class HomeScreen extends StatelessWidget {
                   ),
                   SizedBox(height: 8),
                   Text(
-                    'Manually enter your digital behavior and predict stress level.',
+                    'Manually enter your digital behavior and predict burnout level.',
                     style: TextStyle(color: Colors.white70),
                   ),
                 ],
@@ -104,7 +104,7 @@ class HomeScreen extends StatelessWidget {
                   SizedBox(width: 12),
                   Expanded(
                     child: Text(
-                      'Use model-based prediction to estimate stress level.',
+                      'Use model-based prediction to estimate burnout level.',
                       style: TextStyle(fontSize: 15),
                     ),
                   ),
