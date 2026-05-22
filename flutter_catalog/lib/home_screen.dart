@@ -1,8 +1,11 @@
 import 'package:flutter/material.dart';
 import 'prediction_screen.dart';
+import 'continuous_monitoring_consent_screen.dart';
 
 class HomeScreen extends StatelessWidget {
-  const HomeScreen({super.key});
+  final String name;
+
+  const HomeScreen({super.key, required this.name});
 
   @override
   Widget build(BuildContext context) {
@@ -22,22 +25,23 @@ class HomeScreen extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text(
-              'Hello!',
-              style: TextStyle(
+            Text(
+              'Hello, $name 👋',
+              style: const TextStyle(
                 fontSize: 28,
                 fontWeight: FontWeight.w700,
               ),
             ),
             const SizedBox(height: 8),
             const Text(
-              'Track your focus, stress and digital burnout.',
+              'Choose how you want to monitor burnout.',
               style: TextStyle(
                 fontSize: 16,
                 color: Colors.black54,
               ),
             ),
             const SizedBox(height: 28),
+
             Container(
               width: double.infinity,
               padding: const EdgeInsets.all(20),
@@ -50,11 +54,11 @@ class HomeScreen extends StatelessWidget {
                 ),
                 borderRadius: BorderRadius.circular(24),
               ),
-              child: Column(
+              child: const Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
-                children: const [
+                children: [
                   Text(
-                    'Burnout Detection',
+                    'Burnout Monitoring',
                     style: TextStyle(
                       color: Colors.white,
                       fontSize: 22,
@@ -63,13 +67,15 @@ class HomeScreen extends StatelessWidget {
                   ),
                   SizedBox(height: 8),
                   Text(
-                    'Manually enter your digital behavior and predict burnout level.',
+                    'Use manual input or enable continuous monitoring for habit-based burnout detection.',
                     style: TextStyle(color: Colors.white70),
                   ),
                 ],
               ),
             ),
+
             const SizedBox(height: 24),
+
             Container(
               width: double.infinity,
               padding: const EdgeInsets.all(18),
@@ -77,20 +83,22 @@ class HomeScreen extends StatelessWidget {
                 color: Colors.white,
                 borderRadius: BorderRadius.circular(20),
               ),
-              child: Row(
-                children: const [
+              child: const Row(
+                children: [
                   Icon(Icons.privacy_tip_outlined, color: Color(0xFF45199D)),
                   SizedBox(width: 12),
                   Expanded(
                     child: Text(
-                      'Privacy-first design: only approved data should be used.',
+                      'Privacy-first design: monitoring starts only after user consent.',
                       style: TextStyle(fontSize: 15),
                     ),
                   ),
                 ],
               ),
             ),
+
             const SizedBox(height: 18),
+
             Container(
               width: double.infinity,
               padding: const EdgeInsets.all(18),
@@ -98,20 +106,22 @@ class HomeScreen extends StatelessWidget {
                 color: Colors.white,
                 borderRadius: BorderRadius.circular(20),
               ),
-              child: Row(
-                children: const [
+              child: const Row(
+                children: [
                   Icon(Icons.analytics_outlined, color: Color(0xFF45199D)),
                   SizedBox(width: 12),
                   Expanded(
                     child: Text(
-                      'Use model-based prediction to estimate burnout level.',
+                      'Manual mode uses entered values, while continuous mode uses collected behavioral summaries.',
                       style: TextStyle(fontSize: 15),
                     ),
                   ),
                 ],
               ),
             ),
+
             const Spacer(),
+
             SizedBox(
               width: double.infinity,
               child: ElevatedButton(
@@ -131,8 +141,39 @@ class HomeScreen extends StatelessWidget {
                   );
                 },
                 child: const Text(
-                  'Start Prediction',
+                  'Manual Mode',
                   style: TextStyle(color: Colors.white, fontSize: 16),
+                ),
+              ),
+            ),
+
+            const SizedBox(height: 12),
+
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton(
+                style: OutlinedButton.styleFrom(
+                  side: const BorderSide(color: Color(0xFF45199D), width: 1.5),
+                  padding: const EdgeInsets.symmetric(vertical: 16),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                ),
+                onPressed: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) =>
+                          const ContinuousMonitoringConsentScreen(),
+                    ),
+                  );
+                },
+                child: const Text(
+                  'Continuous Monitoring',
+                  style: TextStyle(
+                    color: Color(0xFF45199D),
+                    fontSize: 16,
+                  ),
                 ),
               ),
             ),

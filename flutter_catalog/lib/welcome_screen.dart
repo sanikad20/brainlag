@@ -7,227 +7,266 @@ class WelcomeScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final screenWidth = MediaQuery.of(context).size.width;
+
     return Scaffold(
       backgroundColor: const Color(0xFFF3F3F3),
-      body: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 18),
-          child: Column(
-            children: [
-              const SizedBox(height: 20),
+      body: Stack(
+        clipBehavior: Clip.none, // Allows the wave to extend outside the screen
+        children: [
+          /// ---------------- Main Content ----------------
+          SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 18),
+              child: Column(
+                children: [
+                  const SizedBox(height: 20),
 
-              Expanded(
-                child: Container(
-                  width: double.infinity,
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFF8F8F8),
-                    borderRadius: BorderRadius.circular(40),
-                  ),
-                  child: Column(
-                    children: [
-                      const SizedBox(height: 70),
+                  /// Main Rounded Card
+                  Expanded(
+                    child: Container(
+                      width: double.infinity,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFF8F8F8),
+                        borderRadius: BorderRadius.circular(50),
+                      ),
+                      child: Column(
+                        children: [
+                          const SizedBox(height: 60),
 
-                      Expanded(
-                        child: Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 0),
-                          child: Container(
-                            margin: const EdgeInsets.symmetric(horizontal: 0),
-                            width: double.infinity,
-                            decoration: BoxDecoration(
-                              color: const Color(0xFFF8F8F8),
-                              borderRadius: BorderRadius.circular(32),
-                              border: Border.all(
-                                color: const Color(0xFF45199D),
-                                width: 2.2,
-                              ),
-                            ),
+                          /// ---------------- Logo Section ----------------
+                          Expanded(
                             child: Stack(
+                              alignment: Alignment.center,
                               children: [
+                                /// Left Decorative Panel
                                 Positioned(
-                                  left: 22,
-                                  top: 85,
+                                  left: 30,
                                   child: Container(
-                                    width: 68,
-                                    height: 155,
+                                    width: 80,
+                                    height: 180,
                                     color: const Color(0xFFEFF2F5),
                                   ),
                                 ),
+
+                                /// Right Decorative Panel
                                 Positioned(
-                                  right: 22,
-                                  top: 85,
+                                  right: 30,
                                   child: Container(
-                                    width: 68,
-                                    height: 155,
+                                    width: 80,
+                                    height: 180,
                                     color: const Color(0xFFEFF2F5),
                                   ),
                                 ),
-                                Center(
-                                  child: Container(
-                                    padding: const EdgeInsets.all(14),
-                                    decoration: BoxDecoration(
-                                      color: Colors.white,
-                                      borderRadius: BorderRadius.circular(24),
-                                      border: Border.all(
-                                        color: const Color(0xFF2F56B0),
-                                        width: 2,
-                                      ),
-                                    ),
-                                    child: Image.asset(
-                                      'assets/logo.png',
-                                      width: 115,
-                                      height: 115,
-                                      fit: BoxFit.contain,
-                                    ),
-                                  ),
+
+                                /// Large Logo (No Container)
+                                Image.asset(
+                                  'assets/logo.png',
+                                  width: screenWidth * 0.85,
+                                  fit: BoxFit.contain,
                                 ),
                               ],
                             ),
                           ),
-                        ),
-                      ),
 
-                      const SizedBox(height: 28),
-
-                      const Padding(
-                        padding: EdgeInsets.symmetric(horizontal: 18),
-                        child: Text(
-                          'Reset Your Focus, Reclaim Your Balance.',
-                          textAlign: TextAlign.center,
-                          style: TextStyle(
-                            fontSize: 18,
-                            fontWeight: FontWeight.w800,
-                            color: Colors.black,
+                          /// ---------------- Tagline ----------------
+                          const Padding(
+                            padding: EdgeInsets.symmetric(horizontal: 24),
+                            child: Text(
+                              'Reset Your Focus, Reclaim Your Balance.',
+                              textAlign: TextAlign.center,
+                              style: TextStyle(
+                                fontSize: 18,
+                                fontWeight: FontWeight.w800,
+                                color: Colors.black87,
+                              ),
+                            ),
                           ),
-                        ),
-                      ),
 
-                      const SizedBox(height: 26),
+                          const SizedBox(height: 30),
 
-                      Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 24),
-                        child: Column(
-                          children: [
-                            SizedBox(
-                              width: double.infinity,
-                              child: ElevatedButton(
-                                style: ElevatedButton.styleFrom(
-                                  backgroundColor: const Color(0xFF45199D),
-                                  padding:
-                                      const EdgeInsets.symmetric(vertical: 15),
-                                  shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(14),
-                                  ),
-                                ),
-                                onPressed: () {
-                                  Navigator.push(
-                                    context,
-                                    MaterialPageRoute(
-                                      builder: (_) => const LoginScreen(),
+                          /// ---------------- Buttons ----------------
+                          Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 24),
+                            child: Column(
+                              children: [
+                                /// Login Button
+                                SizedBox(
+                                  width: double.infinity,
+                                  child: ElevatedButton(
+                                    style: ElevatedButton.styleFrom(
+                                      backgroundColor: const Color(0xFF5C21CC),
+                                      padding: const EdgeInsets.symmetric(
+                                          vertical: 16),
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius:
+                                            BorderRadius.circular(14),
+                                      ),
+                                      elevation: 4,
                                     ),
-                                  );
-                                },
-                                child: const Text(
-                                  'Login',
-                                  style: TextStyle(
-                                    fontSize: 16,
-                                    color: Colors.white,
-                                  ),
-                                ),
-                              ),
-                            ),
-                            const SizedBox(height: 12),
-                            SizedBox(
-                              width: double.infinity,
-                              child: OutlinedButton(
-                                style: OutlinedButton.styleFrom(
-                                  side: const BorderSide(
-                                    color: Color(0xFF45199D),
-                                    width: 1.5,
-                                  ),
-                                  padding:
-                                      const EdgeInsets.symmetric(vertical: 15),
-                                  shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(14),
-                                  ),
-                                ),
-                                onPressed: () {
-                                  Navigator.push(
-                                    context,
-                                    MaterialPageRoute(
-                                      builder: (_) => const RegisterScreen(),
+                                    onPressed: () {
+                                      Navigator.push(
+                                        context,
+                                        MaterialPageRoute(
+                                          builder: (_) =>
+                                              const LoginScreen(),
+                                        ),
+                                      );
+                                    },
+                                    child: const Text(
+                                      'Login',
+                                      style: TextStyle(
+                                        fontSize: 16,
+                                        color: Colors.white,
+                                        fontWeight: FontWeight.w600,
+                                      ),
                                     ),
-                                  );
-                                },
-                                child: const Text(
-                                  'Register',
-                                  style: TextStyle(
-                                    fontSize: 16,
-                                    color: Color(0xFF45199D),
                                   ),
                                 ),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
+                                const SizedBox(height: 12),
 
-                      const SizedBox(height: 26),
-
-                      SizedBox(
-                        height: 120,
-                        width: double.infinity,
-                        child: Stack(
-                          children: [
-                            Positioned(
-                              left: 0,
-                              right: 0,
-                              bottom: 28,
-                              child: Container(
-                                height: 58,
-                                color: const Color(0xFF8A5CE6),
-                              ),
-                            ),
-                            Positioned(
-                              left: 18,
-                              bottom: 0,
-                              child: Container(
-                                width: 155,
-                                height: 62,
-                                decoration: const BoxDecoration(
-                                  color: Color(0xFF5C21CC),
-                                  borderRadius: BorderRadius.only(
-                                    topLeft: Radius.circular(120),
-                                    topRight: Radius.circular(120),
+                                /// Register Button
+                                SizedBox(
+                                  width: double.infinity,
+                                  child: OutlinedButton(
+                                    style: OutlinedButton.styleFrom(
+                                      side: const BorderSide(
+                                        color: Color(0xFF5C21CC),
+                                        width: 1.5,
+                                      ),
+                                      padding: const EdgeInsets.symmetric(
+                                          vertical: 16),
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius:
+                                            BorderRadius.circular(14),
+                                      ),
+                                    ),
+                                    onPressed: () {
+                                      Navigator.push(
+                                        context,
+                                        MaterialPageRoute(
+                                          builder: (_) =>
+                                              const RegisterScreen(),
+                                        ),
+                                      );
+                                    },
+                                    child: const Text(
+                                      'Register',
+                                      style: TextStyle(
+                                        fontSize: 16,
+                                        color: Color(0xFF5C21CC),
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                    ),
                                   ),
                                 ),
-                              ),
+                                const SizedBox(height: 120), // Space for wave
+                              ],
                             ),
-                            Positioned(
-                              right: 18,
-                              bottom: 0,
-                              child: Container(
-                                width: 155,
-                                height: 62,
-                                decoration: const BoxDecoration(
-                                  color: Color(0xFF5C21CC),
-                                  borderRadius: BorderRadius.only(
-                                    topLeft: Radius.circular(120),
-                                    topRight: Radius.circular(120),
-                                  ),
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
+                          ),
+                        ],
                       ),
-                    ],
+                    ),
                   ),
-                ),
+                ],
               ),
-            ],
+            ),
           ),
-        ),
+
+          /// ---------------- Bottom Waves ----------------
+          Positioned(
+            bottom: -10,
+            left: -40,
+            right: -40,
+            child: SizedBox(
+              width: screenWidth + 80, // Extend beyond screen edges
+              height: 180,
+              child: Stack(
+                children: const [
+                  CustomPaint(
+                    size: Size(double.infinity, 180),
+                    painter: LightWavePainter(),
+                  ),
+                  CustomPaint(
+                    size: Size(double.infinity, 180),
+                    painter: DarkWavePainter(),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
+}
+
+/// ---------------- Light Purple Wave ----------------
+class LightWavePainter extends CustomPainter {
+  const LightWavePainter();
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = const Color(0xFF8A5CE6)
+      ..style = PaintingStyle.fill;
+
+    final path = Path()
+      ..moveTo(0, size.height * 0.4)
+      ..quadraticBezierTo(
+        size.width * 0.25,
+        size.height * 0.15,
+        size.width * 0.5,
+        size.height * 0.4,
+      )
+      ..quadraticBezierTo(
+        size.width * 0.75,
+        size.height * 0.6,
+        size.width,
+        size.height * 0.4,
+      )
+      ..lineTo(size.width, size.height)
+      ..lineTo(0, size.height)
+      ..close();
+
+    canvas.drawPath(path, paint);
+  }
+
+  @override
+  bool shouldRepaint(CustomPainter oldDelegate) => false;
+}
+
+/// ---------------- Dark Purple Wave ----------------
+class DarkWavePainter extends CustomPainter {
+  const DarkWavePainter();
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = const Color(0xFF5C21CC)
+      ..style = PaintingStyle.fill;
+
+    final path = Path()
+      ..moveTo(0, size.height * 0.6)
+      ..quadraticBezierTo(
+        size.width * 0.3,
+        size.height * 0.85,
+        size.width * 0.6,
+        size.height * 0.6,
+      )
+      ..quadraticBezierTo(
+        size.width * 0.9,
+        size.height * 0.4,
+        size.width,
+        size.height * 0.7,
+      )
+      ..lineTo(size.width, size.height)
+      ..lineTo(0, size.height)
+      ..close();
+
+    canvas.drawPath(path, paint);
+  }
+
+  @override
+  bool shouldRepaint(CustomPainter oldDelegate) => false;
 }

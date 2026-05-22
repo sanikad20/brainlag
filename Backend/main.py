@@ -7,6 +7,7 @@ import torch.nn as nn
 import pickle
 import joblib
 import numpy as np
+from typing import List
 
 from database import Base, engine, SessionLocal
 from models import User
@@ -63,8 +64,23 @@ class BurnoutInput(BaseModel):
     social_hours_per_week: float
 
 
+# -------- LSTM schemas --------
+class DailyLSTMInput(BaseModel):
+    screen_time_hours: float
+    work_screen_hours: float
+    leisure_screen_hours: float
+    sleep_hours: float
+    sleep_quality_1_5: float
+    social_hours_per_week: float
+    productivity_0_100: float
+
+
+class LSTMSequenceInput(BaseModel):
+    sequence: List[DailyLSTMInput]
+
+
 # ----------------------------
-# Model Architecture
+# Manual Model Architecture
 # ----------------------------
 class BurnoutModel(nn.Module):
     def __init__(self, n_features: int):
@@ -84,7 +100,29 @@ class BurnoutModel(nn.Module):
 
 
 # ----------------------------
-# Load ML Model
+# LSTM Model Architecture
+# ----------------------------
+class BurnoutLSTM(nn.Module):
+    def __init__(self, input_size: int, hidden_size: int = 64):
+        super().__init__()
+        self.lstm = nn.LSTM(input_size, hidden_size, batch_first=True)
+        self.fc1 = nn.Linear(hidden_size, 32)
+        self.relu = nn.ReLU()
+        self.dropout = nn.Dropout(0.2)
+        self.fc2 = nn.Linear(32, 1)
+
+    def forward(self, x):
+        out, _ = self.lstm(x)
+        out = out[:, -1, :]
+        out = self.fc1(out)
+        out = self.relu(out)
+        out = self.dropout(out)
+        out = self.fc2(out)
+        return out
+
+
+# ----------------------------
+# Load Manual ML Model
 # ----------------------------
 with open("feature_cols.pkl", "rb") as f:
     feature_cols = pickle.load(f)
@@ -104,6 +142,39 @@ model.eval()
 
 
 # ----------------------------
+# Load LSTM Model
+# ----------------------------
+with open("lstm_feature_cols.pkl", "rb") as f:
+    lstm_feature_cols = pickle.load(f)
+
+lstm_scaler = joblib.load("lstm_scaler.pkl")
+
+lstm_model = BurnoutLSTM(input_size=len(lstm_feature_cols))
+
+lstm_state_dict = torch.load(
+    "lstm_burnout_model.pt",
+    map_location="cpu",
+    weights_only=True
+)
+
+lstm_model.load_state_dict(lstm_state_dict)
+lstm_model.eval()
+
+LSTM_SEQ_LEN = 5
+
+
+# ----------------------------
+# Helper
+# ----------------------------
+def get_burnout_level(score: float) -> str:
+    if score < 4:
+        return "Low 🟢"
+    elif score < 7:
+        return "Moderate 🟠"
+    return "High 🔴"
+
+
+# ----------------------------
 # Routes
 # ----------------------------
 @app.get("/")
@@ -120,7 +191,6 @@ def register(data: RegisterInput, db: Session = Depends(get_db)):
     if existing_user:
         raise HTTPException(status_code=400, detail="Email already registered")
 
-    # bcrypt max limit fix
     if len(data.password) > 72:
         raise HTTPException(
             status_code=400,
@@ -176,7 +246,7 @@ def login(data: LoginInput, db: Session = Depends(get_db)):
 
 
 # ----------------------------
-# Prediction
+# Manual Prediction
 # ----------------------------
 @app.post("/predict")
 def predict(data: BurnoutInput):
@@ -207,13 +277,52 @@ def predict(data: BurnoutInput):
         raw_output = model(input_tensor).item()
 
     prediction = float(np.clip(raw_output, 1, 10))
+    level = get_burnout_level(prediction)
 
-    if prediction < 4:
-        level = "Low 🟢"
-    elif prediction < 7:
-        level = "Moderate 🟠"
-    else:
-        level = "High 🔴"
+    return {
+        "raw_prediction": round(raw_output, 4),
+        "prediction": round(prediction, 2),
+        "stress_level": level
+    }
+
+
+# ----------------------------
+# Continuous LSTM Prediction
+# ----------------------------
+@app.post("/predict_lstm")
+def predict_lstm(data: LSTMSequenceInput):
+    if len(data.sequence) != LSTM_SEQ_LEN:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Exactly {LSTM_SEQ_LEN} days of input are required"
+        )
+
+    sequence_data = []
+    for day in data.sequence:
+        row_dict = {
+            "screen_time_hours": day.screen_time_hours,
+            "work_screen_hours": day.work_screen_hours,
+            "leisure_screen_hours": day.leisure_screen_hours,
+            "sleep_hours": day.sleep_hours,
+            "sleep_quality_1_5": day.sleep_quality_1_5,
+            "social_hours_per_week": day.social_hours_per_week,
+            "productivity_0_100": day.productivity_0_100,
+        }
+
+        row = [float(row_dict[col]) for col in lstm_feature_cols]
+        sequence_data.append(row)
+
+    sequence_array = np.array(sequence_data, dtype=np.float32)
+    sequence_scaled = lstm_scaler.transform(sequence_array)
+    sequence_scaled = np.expand_dims(sequence_scaled, axis=0)
+
+    input_tensor = torch.tensor(sequence_scaled, dtype=torch.float32)
+
+    with torch.no_grad():
+        raw_output = lstm_model(input_tensor).item()
+
+    prediction = float(np.clip(raw_output, 1, 10))
+    level = get_burnout_level(prediction)
 
     return {
         "raw_prediction": round(raw_output, 4),
