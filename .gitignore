@@ -1,9 +1,33 @@
-venv/
-__MACOSX/
-*.zip
-sensing_cache.pkl
-models/unified_burnout_dataset.csv
-ScreenTime vs MentalWellness.csv
-student life/
+# Flutter
+**/.dart_tool/
+**/.flutter-plugins
+**/.flutter-plugins-dependencies
+**/.packages
+**/build/
+**/.pub-cache/
+**/.pub/
+**/android/.gradle/
+**/ios/Pods/
+**/ios/.symlinks/
+
+# Python
+__pycache__/
 *.pyc
+*.pyo
+*.pyd
+*.pkl
+.venv/
+venv/
+env/
+
+# VS Code
+.vscode/
+
+# IDE
+.idea/
+
+# Database
+*.db
+
+# OS files
 .DS_Store
