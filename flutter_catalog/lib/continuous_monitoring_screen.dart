@@ -2,30 +2,7 @@ import 'dart:async';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 import 'api_service.dart';
-
-/// Stores one day's result in memory.
-/// TODO: swap List for Hive/SharedPreferences for persistence across app restarts.
-class _DayRecord {
-  final DateTime date;
-  final double   burnoutScore;
-  final String   burnoutLevel;
-  final double   screenTime;
-  final double   socialRatio;
-  final double   workRatio;
-  final double   sleepHours;
-  final double   appSwitches;
-
-  const _DayRecord({
-    required this.date,
-    required this.burnoutScore,
-    required this.burnoutLevel,
-    required this.screenTime,
-    required this.socialRatio,
-    required this.workRatio,
-    required this.sleepHours,
-    required this.appSwitches,
-  });
-}
+import 'usage_service.dart';
 
 class ContinuousMonitoringScreen extends StatefulWidget {
   const ContinuousMonitoringScreen({super.key});
@@ -38,249 +15,194 @@ class ContinuousMonitoringScreen extends StatefulWidget {
 class _ContinuousMonitoringScreenState
     extends State<ContinuousMonitoringScreen> {
 
-  final List<_DayRecord> _history = [];
-  bool   _isFetching = false;
-  String _statusMsg  = 'Tap refresh to fetch today\'s data.';
+  bool   _isFetching    = false;
+  bool   _hasPermission = false;
+  String _statusMsg     = 'Checking permissions…';
+
+  List<DayUsageRaw>  _history    = [];
+  PersonalBaseline?  _baseline;
+  double?            _todayScreenTime;  // live screen time
+  int                _daysSinceInstall = 0;
+
+  final Map<int, double> _scores = {};
+  final Map<int, String> _levels = {};
+
   Timer? _autoTimer;
-
-  // ─── Build usage objects from Android UsageStats ──────────────────────────
-  // These two methods are where you plug in your MethodChannel data.
-  // Right now they return realistic demo values.
-
-  DayUsage _todayUsage() {
-    // TODO: replace with real values from MethodChannel 'brainlag/usage_access'
-    // The channel already collects screenTime and appSwitches — extend it to
-    // also return socialAppRatio / workAppRatio by categorising package names.
-    return const DayUsage(
-      screenTimeHours:     6.5,
-      appSwitchesPerHour:  28,
-      uniqueAppsPerDay:    18,
-      socialAppRatio:      0.40,  // Instagram + WhatsApp + Twitter time / total
-      workAppRatio:        0.25,  // Gmail + Docs + Slack time / total
-      entertainmentRatio:  0.20,  // YouTube + Netflix time / total
-      wellnessRatio:       0.05,
-      sleepHours:          6.0,
-      sleepQuality:        3,
-      exerciseMinPerWeek:  90,
-      socialHoursPerWeek:  12,
-      callCount:           4,
-      missedCallRatio:     0.2,
-      smsCount:            15,
-    );
-  }
-
-  DayUsage _yesterdayUsage() {
-    // TODO: load yesterday's stored values from SharedPreferences / Hive
-    return const DayUsage(
-      screenTimeHours:     4.5,
-      appSwitchesPerHour:  18,
-      uniqueAppsPerDay:    12,
-      socialAppRatio:      0.20,
-      workAppRatio:        0.45,
-      entertainmentRatio:  0.15,
-      wellnessRatio:       0.10,
-      sleepHours:          7.5,
-      sleepQuality:        4,
-      exerciseMinPerWeek:  120,
-      socialHoursPerWeek:  10,
-      callCount:           6,
-      missedCallRatio:     0.05,
-      smsCount:            22,
-    );
-  }
-
-  // ─── Fetch → predict → store ──────────────────────────────────────────────
-
-  Future<void> _refresh() async {
-    if (_isFetching) return;
-    setState(() {
-      _isFetching = true;
-      _statusMsg  = 'Analysing 2-day behaviour…';
-    });
-
-    try {
-      final result = await ApiService.instance.predictTwoDay(
-        day1: _yesterdayUsage(),
-        day2: _todayUsage(),
-      );
-
-      final today = _todayUsage();
-      final record = _DayRecord(
-        date:         DateTime.now(),
-        burnoutScore: result.score,
-        burnoutLevel: result.level,
-        screenTime:   today.screenTimeHours,
-        socialRatio:  today.socialAppRatio,
-        workRatio:    today.workAppRatio,
-        sleepHours:   today.sleepHours,
-        appSwitches:  today.appSwitchesPerHour,
-      );
-
-      setState(() {
-        if (_history.length >= 7) _history.removeAt(0);
-        _history.add(record);
-        _statusMsg = 'Updated at ${_fmt(DateTime.now())}';
-      });
-    } catch (e) {
-      setState(() => _statusMsg = 'Error: $e');
-    } finally {
-      setState(() => _isFetching = false);
-    }
-  }
-
-  String _fmt(DateTime t) =>
-      '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
+  Timer? _screenTimeTimer;  // refreshes live screen time every 5 min
 
   @override
   void initState() {
     super.initState();
-    _refresh();
-    _autoTimer = Timer.periodic(const Duration(minutes: 30), (_) => _refresh());
+    _checkPermissionAndLoad();
+    // Refresh every 30 min
+    _autoTimer = Timer.periodic(
+        const Duration(minutes: 30), (_) => _checkPermissionAndLoad());
+    // Update live screen time every 5 min
+    _screenTimeTimer = Timer.periodic(
+        const Duration(minutes: 5), (_) => _refreshTodayScreenTime());
   }
 
   @override
   void dispose() {
     _autoTimer?.cancel();
+    _screenTimeTimer?.cancel();
     super.dispose();
   }
 
-  // ─── Deviation detection ──────────────────────────────────────────────────
+  // ── Permission ────────────────────────────────────────────────────────────
+
+  Future<void> _checkPermissionAndLoad() async {
+    final granted = await UsageService.instance.hasPermission();
+    setState(() => _hasPermission = granted);
+    if (granted) {
+      await _loadAndPredict();
+    } else {
+      setState(() => _statusMsg = 'Grant usage access to continue.');
+    }
+  }
+
+  // ── Live screen time refresh ──────────────────────────────────────────────
+
+  Future<void> _refreshTodayScreenTime() async {
+    if (!_hasPermission) return;
+    final h = await UsageService.instance.fetchTodayScreenTime();
+    if (mounted) setState(() => _todayScreenTime = h);
+  }
+
+  // ── Main load ─────────────────────────────────────────────────────────────
+
+  Future<void> _loadAndPredict() async {
+    if (_isFetching) return;
+    setState(() {
+      _isFetching = true;
+      _statusMsg  = 'Reading your Digital Wellbeing data…';
+    });
+
+    try {
+      // 1. Get install date
+      await UsageService.instance.getInstallDate();
+      final daysSince = UsageService.instance.daysSinceInstall;
+
+      // 2. Fetch real history from Android — only since install date
+      final history = await UsageService.instance.fetchHistory(
+          maxDays: 14, forceRefresh: true);
+
+      // 3. Fetch live screen time for today
+      final todayScreen =
+          await UsageService.instance.fetchTodayScreenTime();
+
+      if (history.isEmpty) {
+        setState(() {
+          _statusMsg   = 'No usage data yet. Use your phone normally '
+              'and check back tomorrow.';
+          _isFetching  = false;
+          _daysSinceInstall = daysSince;
+        });
+        return;
+      }
+
+      final baseline = UsageService.instance.baseline!;
+
+      setState(() {
+        _history          = history;
+        _baseline         = baseline;
+        _todayScreenTime  = todayScreen;
+        _daysSinceInstall = daysSince;
+        _statusMsg        = 'Analysing ${history.length}-day pattern…';
+      });
+
+      // 4. Run burnout prediction for each consecutive day pair
+      _scores.clear();
+      _levels.clear();
+
+      for (int i = 0; i < history.length - 1; i++) {
+        final newer = history[i];
+        final older = history[i + 1];
+        try {
+          final result = await ApiService.instance.predictTwoDay(
+            day1: _toApiUsage(older, baseline),
+            day2: _toApiUsage(newer, baseline),
+          );
+          if (mounted) {
+            setState(() {
+              _scores[i] = result.score;
+              _levels[i] = result.level;
+            });
+          }
+        } catch (_) {}
+      }
+
+      setState(() {
+        _statusMsg = 'Updated ${_fmt(DateTime.now())}  '
+            '· ${history.length} days of data';
+      });
+
+    } catch (e) {
+      setState(() => _statusMsg = 'Error: $e');
+    } finally {
+      if (mounted) setState(() => _isFetching = false);
+    }
+  }
+
+  DayUsage _toApiUsage(DayUsageRaw raw, PersonalBaseline b) => DayUsage(
+        screenTimeHours:    raw.screenTimeHours,
+        appSwitchesPerHour: raw.appSwitchesPerHour,
+        uniqueAppsPerDay:   raw.uniqueAppsPerDay.toDouble(),
+        socialAppRatio:     raw.socialAppRatio,
+        workAppRatio:       raw.workAppRatio,
+        entertainmentRatio: raw.entertainmentRatio,
+        wellnessRatio:      raw.wellnessRatio,
+        sleepHours:         7.0,
+        sleepQuality:       3.0,
+        exerciseMinPerWeek: 120.0,
+        socialHoursPerWeek: 10.0,
+        callCount:          5.0,
+        missedCallRatio:    0.1,
+        smsCount:           20.0,
+      );
+
+  String _fmt(DateTime t) =>
+      '${t.hour.toString().padLeft(2, '0')}:'
+      '${t.minute.toString().padLeft(2, '0')}';
+
+  // ── Deviation alerts using dynamic thresholds ─────────────────────────────
 
   List<String> get _deviationAlerts {
-    if (_history.length < 2) return [];
-    final prev = _history[_history.length - 2];
-    final curr = _history.last;
-    final alerts = <String>[];
+    if (_history.isEmpty || _baseline == null) return [];
+    final today   = _history.first;
+    final b       = _baseline!;
+    final alerts  = <String>[];
 
-    if (curr.screenTime  - prev.screenTime  >  1.5)
-      alerts.add('📱 Screen time up ${(curr.screenTime - prev.screenTime).toStringAsFixed(1)}h vs yesterday');
-    if (curr.socialRatio - prev.socialRatio >  0.15)
-      alerts.add('📲 Social app usage spiked vs yesterday');
-    if (prev.workRatio   - curr.workRatio   >  0.15)
-      alerts.add('💼 Work app usage dropped vs yesterday');
-    if (prev.sleepHours  - curr.sleepHours  >  1.0)
-      alerts.add('😴 Slept ${(prev.sleepHours - curr.sleepHours).toStringAsFixed(1)}h less than yesterday');
-    if (curr.appSwitches - prev.appSwitches >  15)
-      alerts.add('🔀 App switching increased significantly today');
+    // Use DYNAMIC thresholds from PersonalBaseline
+    if (today.screenTimeHours > b.thresholdScreenTime)
+      alerts.add('📱 Screen time ${today.screenTimeHours.toStringAsFixed(1)}h '
+          '> your threshold ${b.thresholdScreenTime.toStringAsFixed(1)}h');
+
+    if (today.socialAppRatio > b.thresholdSocialRatio)
+      alerts.add('📲 Social apps ${(today.socialAppRatio * 100).toStringAsFixed(0)}% '
+          '> your threshold ${(b.thresholdSocialRatio * 100).toStringAsFixed(0)}%');
+
+    if (today.appSwitchesPerHour > b.thresholdAppSwitches)
+      alerts.add('🔀 App switches ${today.appSwitchesPerHour.toStringAsFixed(0)}/hr '
+          '> your threshold ${b.thresholdAppSwitches.toStringAsFixed(0)}/hr');
+
+    if (b.screenZScore(today.screenTimeHours) > 1.5)
+      alerts.add('⚠️ Screen time is '
+          '${b.screenZScore(today.screenTimeHours).toStringAsFixed(1)}σ '
+          'above your personal average');
+
+    if (b.socialZScore(today.socialAppRatio) > 1.5)
+      alerts.add('⚠️ Social usage is '
+          '${b.socialZScore(today.socialAppRatio).toStringAsFixed(1)}σ '
+          'above your normal');
+
+    if (today.workAppRatio < b.avgWorkRatio * 0.6 && b.avgWorkRatio > 0.1)
+      alerts.add('💼 Work app usage dropped significantly today');
 
     return alerts;
   }
 
-  // ─── Chart helper ─────────────────────────────────────────────────────────
-
-  Widget _lineChart({
-    required String title,
-    required List<FlSpot> spots,
-    required double maxY,
-    Color color = const Color(0xFF8A5CE6),
-  }) {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: const Color(0xFF232325),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: Colors.white12),
-      ),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Text(title, style: const TextStyle(
-            color: Colors.white, fontSize: 15, fontWeight: FontWeight.w600)),
-        const SizedBox(height: 14),
-        spots.isEmpty
-            ? const Center(
-                child: Padding(
-                  padding: EdgeInsets.all(20),
-                  child: Text('No data yet',
-                      style: TextStyle(color: Colors.white38)),
-                ))
-            : SizedBox(
-                height: 190,
-                child: LineChart(LineChartData(
-                  minX: 0,
-                  maxX: (_history.length - 1).toDouble().clamp(1, 6),
-                  minY: 0,
-                  maxY: maxY,
-                  gridData: FlGridData(
-                    show: true, drawVerticalLine: false,
-                    getDrawingHorizontalLine: (_) =>
-                        const FlLine(color: Colors.white12, strokeWidth: 1),
-                  ),
-                  borderData: FlBorderData(show: false),
-                  titlesData: FlTitlesData(
-                    rightTitles: const AxisTitles(
-                        sideTitles: SideTitles(showTitles: false)),
-                    topTitles: const AxisTitles(
-                        sideTitles: SideTitles(showTitles: false)),
-                    leftTitles: AxisTitles(
-                      sideTitles: SideTitles(
-                        showTitles: true,
-                        reservedSize: 28,
-                        getTitlesWidget: (v, _) => Text(
-                          v.toStringAsFixed(1),
-                          style: const TextStyle(
-                              color: Colors.white38, fontSize: 9),
-                        ),
-                      ),
-                    ),
-                    bottomTitles: AxisTitles(
-                      sideTitles: SideTitles(
-                        showTitles: true,
-                        getTitlesWidget: (v, _) {
-                          final i = v.toInt();
-                          if (i < 0 || i >= _history.length)
-                            return const SizedBox.shrink();
-                          final d = _history[i].date;
-                          return Text('${d.day}/${d.month}',
-                              style: const TextStyle(
-                                  color: Colors.white38, fontSize: 9));
-                        },
-                      ),
-                    ),
-                  ),
-                  lineBarsData: [
-                    LineChartBarData(
-                      spots: spots,
-                      isCurved: true,
-                      color: color,
-                      barWidth: 2.5,
-                      dotData: const FlDotData(show: true),
-                      belowBarData: BarAreaData(
-                          show: true, color: color.withOpacity(0.15)),
-                    ),
-                  ],
-                )),
-              ),
-      ]),
-    );
-  }
-
-  // ─── Info card ────────────────────────────────────────────────────────────
-
-  Widget _infoCard({
-    required String title,
-    required String value,
-    required IconData icon,
-    Color? valueColor,
-  }) =>
-      Container(
-        margin: const EdgeInsets.only(bottom: 10),
-        padding: const EdgeInsets.all(14),
-        decoration: BoxDecoration(
-          color: const Color(0xFF232325),
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: Colors.white12),
-        ),
-        child: Row(children: [
-          Icon(icon, color: const Color(0xFF8A5CE6), size: 22),
-          const SizedBox(width: 12),
-          Expanded(child: Text(title,
-              style: const TextStyle(color: Colors.white70))),
-          Text(value,
-              style: TextStyle(
-                  color: valueColor ?? Colors.white,
-                  fontWeight: FontWeight.w700,
-                  fontSize: 16)),
-        ]),
-      );
+  // ── Widgets ───────────────────────────────────────────────────────────────
 
   Color _levelColor(String level) {
     if (level.contains('Low'))      return Colors.green;
@@ -289,29 +211,389 @@ class _ContinuousMonitoringScreenState
     return Colors.white;
   }
 
-  // ─── Build ────────────────────────────────────────────────────────────────
+  Widget _infoCard({
+    required String title,
+    required String value,
+    required IconData icon,
+    Color? valueColor,
+    String? subtitle,
+    Color? borderColor,
+  }) =>
+      Container(
+        margin: const EdgeInsets.only(bottom: 10),
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: const Color(0xFF232325),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: borderColor ?? Colors.white12),
+        ),
+        child: Row(children: [
+          Icon(icon, color: const Color(0xFF8A5CE6), size: 22),
+          const SizedBox(width: 12),
+          Expanded(child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(title,
+                  style: const TextStyle(color: Colors.white70, fontSize: 14)),
+              if (subtitle != null)
+                Text(subtitle,
+                    style: const TextStyle(
+                        color: Colors.white38, fontSize: 11)),
+            ],
+          )),
+          Text(value, style: TextStyle(
+              color: valueColor ?? Colors.white,
+              fontWeight: FontWeight.w700, fontSize: 16)),
+        ]),
+      );
+
+  // Today's LIVE screen time card — highlighted
+  Widget _liveScreenTimeCard() {
+    final live    = _todayScreenTime;
+    final history = _history.isNotEmpty ? _history.first : null;
+    final b       = _baseline;
+
+    // Use live value if available, else fall back to history
+    final displayHours = live ?? history?.screenTimeHours;
+    final isAboveThreshold = b != null && displayHours != null &&
+        displayHours > b.thresholdScreenTime;
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: isAboveThreshold
+            ? const Color(0xFF2A1A0A)
+            : const Color(0xFF232325),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+          color: isAboveThreshold
+              ? Colors.orange.withOpacity(0.5)
+              : Colors.white12,
+        ),
+      ),
+      child: Row(children: [
+        Icon(
+          Icons.phone_android_outlined,
+          color: isAboveThreshold ? Colors.orange : const Color(0xFF8A5CE6),
+          size: 22,
+        ),
+        const SizedBox(width: 12),
+        Expanded(child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('Screen Time Today  (live)',
+                style: TextStyle(color: Colors.white70, fontSize: 14)),
+            if (b != null)
+              Text(
+                'avg: ${b.avgScreenTime.toStringAsFixed(1)}h  '
+                '· threshold: ${b.thresholdScreenTime.toStringAsFixed(1)}h',
+                style: const TextStyle(color: Colors.white38, fontSize: 11),
+              ),
+          ],
+        )),
+        Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
+          Text(
+            displayHours != null
+                ? '${displayHours.toStringAsFixed(1)} h'
+                : '--',
+            style: TextStyle(
+              color: isAboveThreshold ? Colors.orange : Colors.white,
+              fontWeight: FontWeight.w800,
+              fontSize: 18,
+            ),
+          ),
+          if (isAboveThreshold)
+            const Text('above normal',
+                style: TextStyle(color: Colors.orange, fontSize: 10)),
+        ]),
+      ]),
+    );
+  }
+
+  Widget _baselineCard() {
+    if (_baseline == null) return const SizedBox.shrink();
+    final b = _baseline!;
+    return Container(
+      margin: const EdgeInsets.only(bottom: 14),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1A1A2E),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+            color: const Color(0xFF8A5CE6).withOpacity(0.4)),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          const Icon(Icons.person_outline,
+              color: Color(0xFF8A5CE6), size: 18),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              'Your Personal Baseline',
+              style: const TextStyle(
+                  color: Color(0xFF8A5CE6),
+                  fontWeight: FontWeight.w700, fontSize: 13),
+            ),
+          ),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+            decoration: BoxDecoration(
+              color: b.daysOfData >= 10
+                  ? Colors.green.withOpacity(0.2)
+                  : Colors.orange.withOpacity(0.2),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Text(
+              b.dataQuality,
+              style: TextStyle(
+                color: b.daysOfData >= 10 ? Colors.green : Colors.orange,
+                fontSize: 10,
+              ),
+            ),
+          ),
+        ]),
+        const SizedBox(height: 10),
+        // Averages
+        _bRow('Avg screen time',
+            '${b.avgScreenTime.toStringAsFixed(1)} h/day'),
+        _bRow('Avg social usage',
+            '${(b.avgSocialRatio * 100).toStringAsFixed(0)}%'),
+        _bRow('Avg work usage',
+            '${(b.avgWorkRatio * 100).toStringAsFixed(0)}%'),
+        _bRow('Avg app switches',
+            '${b.avgAppSwitches.toStringAsFixed(0)} /hr'),
+        const Divider(color: Colors.white12, height: 16),
+        // Dynamic thresholds
+        Row(children: [
+          const Icon(Icons.tune, color: Colors.white38, size: 14),
+          const SizedBox(width: 6),
+          const Text('Dynamic Thresholds  (auto-computed from your data)',
+              style: TextStyle(color: Colors.white38, fontSize: 11)),
+        ]),
+        const SizedBox(height: 6),
+        _bRow('Screen time threshold',
+            '${b.thresholdScreenTime.toStringAsFixed(1)} h'),
+        _bRow('Social ratio threshold',
+            '${(b.thresholdSocialRatio * 100).toStringAsFixed(0)}%'),
+        _bRow('App switches threshold',
+            '${b.thresholdAppSwitches.toStringAsFixed(0)} /hr'),
+        const SizedBox(height: 6),
+        Text(
+          _daysSinceInstall > 0
+              ? 'BrainLag installed $_daysSinceInstall day(s) ago. '
+                'Thresholds improve with more data.'
+              : '',
+          style: const TextStyle(color: Colors.white24, fontSize: 10),
+        ),
+      ]),
+    );
+  }
+
+  Widget _bRow(String label, String value) => Padding(
+        padding: const EdgeInsets.only(bottom: 5),
+        child: Row(children: [
+          Expanded(child: Text(label,
+              style: const TextStyle(color: Colors.white60, fontSize: 13))),
+          Text(value, style: const TextStyle(
+              color: Colors.white,
+              fontWeight: FontWeight.w600, fontSize: 13)),
+        ]),
+      );
+
+  Widget _lineChart({
+    required String title,
+    required List<FlSpot> spots,
+    required double maxY,
+    Color color = const Color(0xFF8A5CE6),
+    double? thresholdY,
+    double? avgY,
+  }) =>
+      Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: const Color(0xFF232325),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: Colors.white12),
+        ),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(title, style: const TextStyle(
+              color: Colors.white,
+              fontSize: 15, fontWeight: FontWeight.w600)),
+          const SizedBox(height: 14),
+          spots.isEmpty
+              ? const Center(
+                  child: Padding(
+                    padding: EdgeInsets.all(20),
+                    child: Text('No data yet',
+                        style: TextStyle(color: Colors.white38))))
+              : SizedBox(
+                  height: 200,
+                  child: LineChart(LineChartData(
+                    minX: 0,
+                    maxX: (spots.length - 1).toDouble().clamp(1, 13),
+                    minY: 0, maxY: maxY,
+                    gridData: FlGridData(
+                      show: true, drawVerticalLine: false,
+                      getDrawingHorizontalLine: (_) =>
+                          const FlLine(color: Colors.white12, strokeWidth: 1),
+                    ),
+                    borderData: FlBorderData(show: false),
+                    extraLinesData: ExtraLinesData(
+                      horizontalLines: [
+                        if (thresholdY != null)
+                          HorizontalLine(
+                            y: thresholdY,
+                            color: Colors.orange.withOpacity(0.8),
+                            strokeWidth: 1.5,
+                            dashArray: [6, 4],
+                            label: HorizontalLineLabel(
+                              show: true,
+                              alignment: Alignment.topRight,
+                              labelResolver: (_) => 'threshold',
+                              style: const TextStyle(
+                                  color: Colors.orange, fontSize: 9),
+                            ),
+                          ),
+                        if (avgY != null)
+                          HorizontalLine(
+                            y: avgY,
+                            color: Colors.green.withOpacity(0.5),
+                            strokeWidth: 1,
+                            dashArray: [4, 4],
+                            label: HorizontalLineLabel(
+                              show: true,
+                              alignment: Alignment.bottomRight,
+                              labelResolver: (_) => 'your avg',
+                              style: const TextStyle(
+                                  color: Colors.green, fontSize: 9),
+                            ),
+                          ),
+                      ],
+                    ),
+                    titlesData: FlTitlesData(
+                      rightTitles: const AxisTitles(
+                          sideTitles: SideTitles(showTitles: false)),
+                      topTitles: const AxisTitles(
+                          sideTitles: SideTitles(showTitles: false)),
+                      leftTitles: AxisTitles(
+                        sideTitles: SideTitles(
+                          showTitles: true, reservedSize: 30,
+                          getTitlesWidget: (v, _) => Text(
+                              v.toStringAsFixed(1),
+                              style: const TextStyle(
+                                  color: Colors.white38, fontSize: 9)),
+                        ),
+                      ),
+                      bottomTitles: AxisTitles(
+                        sideTitles: SideTitles(
+                          showTitles: true,
+                          getTitlesWidget: (v, _) {
+                            final i = v.toInt();
+                            if (i < 0 || i >= _history.length)
+                              return const SizedBox.shrink();
+                            final ago = _history[i].daysAgo;
+                            return Padding(
+                              padding: const EdgeInsets.only(top: 4),
+                              child: Text(
+                                ago == 0 ? 'Today' : '-${ago}d',
+                                style: const TextStyle(
+                                    color: Colors.white38, fontSize: 9)),
+                            );
+                          },
+                        ),
+                      ),
+                    ),
+                    lineBarsData: [
+                      LineChartBarData(
+                        spots: spots, isCurved: true,
+                        color: color, barWidth: 2.5,
+                        dotData: FlDotData(
+                          show: true,
+                          getDotPainter: (s, _, __, ___) => FlDotCirclePainter(
+                            radius: 3, color: color,
+                            strokeWidth: 1, strokeColor: Colors.white24,
+                          ),
+                        ),
+                        belowBarData: BarAreaData(
+                            show: true, color: color.withOpacity(0.12)),
+                      ),
+                    ],
+                  )),
+                ),
+        ]),
+      );
+
+  Widget _permissionPrompt() => Center(
+        child: Padding(
+          padding: const EdgeInsets.all(32),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Icon(Icons.lock_outline,
+                  color: Colors.white38, size: 64),
+              const SizedBox(height: 20),
+              const Text('Usage Access Required',
+                  style: TextStyle(color: Colors.white,
+                      fontSize: 20, fontWeight: FontWeight.w700)),
+              const SizedBox(height: 12),
+              const Text(
+                'BrainLag reads your Digital Wellbeing data to detect '
+                'burnout patterns. No data leaves your device without '
+                'your consent.',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: Colors.white54, fontSize: 14),
+              ),
+              const SizedBox(height: 24),
+              ElevatedButton(
+                onPressed: () async {
+                  await UsageService.instance.openSettings();
+                },
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF45199D),
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 32, vertical: 14),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12)),
+                ),
+                child: const Text('Open Settings',
+                    style: TextStyle(color: Colors.white)),
+              ),
+              const SizedBox(height: 12),
+              TextButton(
+                onPressed: _checkPermissionAndLoad,
+                child: const Text("I've granted it — retry",
+                    style: TextStyle(color: Color(0xFF8A5CE6))),
+              ),
+            ],
+          ),
+        ),
+      );
+
+  // ── Build ─────────────────────────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
-    final latest = _history.isNotEmpty ? _history.last : null;
-    final alerts = _deviationAlerts;
+    final today      = _history.isNotEmpty ? _history.first : null;
+    final todayScore = _scores[0];
+    final todayLevel = _levels[0] ?? '--';
+    final alerts     = _deviationAlerts;
+    final b          = _baseline;
 
-    final scoreSpots = _history
-        .asMap()
-        .entries
-        .map((e) => FlSpot(e.key.toDouble(), e.value.burnoutScore))
+    final scoreSpots = _scores.entries
+        .map((e) => FlSpot(e.key.toDouble(), e.value))
+        .toList()..sort((a, b) => a.x.compareTo(b.x));
+
+    final screenSpots = _history.asMap().entries
+        .map((e) => FlSpot(e.key.toDouble(), e.value.screenTimeHours))
         .toList();
 
-    final screenSpots = _history
-        .asMap()
-        .entries
-        .map((e) => FlSpot(e.key.toDouble(), e.value.screenTime))
+    final socialSpots = _history.asMap().entries
+        .map((e) => FlSpot(e.key.toDouble(), e.value.socialAppRatio))
         .toList();
 
-    final socialSpots = _history
-        .asMap()
-        .entries
-        .map((e) => FlSpot(e.key.toDouble(), e.value.socialRatio))
+    final switchSpots = _history.asMap().entries
+        .map((e) => FlSpot(e.key.toDouble(), e.value.appSwitchesPerHour))
         .toList();
 
     return Scaffold(
@@ -325,137 +607,182 @@ class _ContinuousMonitoringScreenState
           IconButton(
             tooltip: 'Refresh',
             icon: _isFetching
-                ? const SizedBox(
-                    width: 18,
-                    height: 18,
+                ? const SizedBox(width: 18, height: 18,
                     child: CircularProgressIndicator(
                         color: Colors.white, strokeWidth: 2))
                 : const Icon(Icons.refresh, color: Colors.white),
-            onPressed: _isFetching ? null : _refresh,
+            onPressed: _isFetching ? null : _checkPermissionAndLoad,
           ),
         ],
       ),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(16),
-        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-
-          // Status bar
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-            margin: const EdgeInsets.only(bottom: 14),
-            decoration: BoxDecoration(
-              color: const Color(0xFF1A1A1C),
-              borderRadius: BorderRadius.circular(10),
-            ),
-            child: Row(children: [
-              const Icon(Icons.access_time, color: Colors.white38, size: 14),
-              const SizedBox(width: 8),
-              Text(_statusMsg,
-                  style: const TextStyle(color: Colors.white54, fontSize: 12)),
-            ]),
-          ),
-
-          // Summary cards
-          _infoCard(
-            title: 'Current Burnout Risk',
-            value: latest?.burnoutLevel ?? '-- --',
-            icon: Icons.health_and_safety_outlined,
-            valueColor: latest != null
-                ? _levelColor(latest.burnoutLevel)
-                : null,
-          ),
-          _infoCard(
-            title: 'Burnout Score (0 – 1)',
-            value: latest != null
-                ? latest.burnoutScore.toStringAsFixed(2)
-                : '--',
-            icon: Icons.show_chart,
-            valueColor: latest != null
-                ? _levelColor(latest.burnoutLevel)
-                : null,
-          ),
-          _infoCard(
-            title: 'Screen Time Today',
-            value: latest != null
-                ? '${latest.screenTime.toStringAsFixed(1)} h'
-                : '--',
-            icon: Icons.phone_android_outlined,
-          ),
-          _infoCard(
-            title: 'Social App Usage',
-            value: latest != null
-                ? '${(latest.socialRatio * 100).toStringAsFixed(0)}%'
-                : '--',
-            icon: Icons.people_outline,
-          ),
-          _infoCard(
-            title: 'Work App Usage',
-            value: latest != null
-                ? '${(latest.workRatio * 100).toStringAsFixed(0)}%'
-                : '--',
-            icon: Icons.work_outline,
-          ),
-
-          const SizedBox(height: 6),
-
-          // Deviation alerts
-          if (alerts.isNotEmpty) ...[
-            Container(
-              padding: const EdgeInsets.all(14),
-              margin: const EdgeInsets.only(bottom: 14),
-              decoration: BoxDecoration(
-                color: const Color(0xFF2A1A0A),
-                borderRadius: BorderRadius.circular(14),
-                border: Border.all(color: Colors.orange.withOpacity(0.4)),
-              ),
+      body: !_hasPermission
+          ? _permissionPrompt()
+          : SingleChildScrollView(
+              padding: const EdgeInsets.all(16),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Row(children: [
-                    Icon(Icons.warning_amber_outlined,
-                        color: Colors.orange, size: 18),
-                    SizedBox(width: 8),
-                    Text('Behaviour Change Detected',
-                        style: TextStyle(
-                            color: Colors.orange,
-                            fontWeight: FontWeight.w700)),
-                  ]),
-                  const SizedBox(height: 10),
-                  ...alerts.map((a) => Padding(
-                        padding: const EdgeInsets.only(bottom: 5),
-                        child: Text(a,
-                            style: const TextStyle(
-                                color: Colors.white70, fontSize: 13)),
-                      )),
+
+                  // Status
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 14, vertical: 10),
+                    margin: const EdgeInsets.only(bottom: 14),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF1A1A1C),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Row(children: [
+                      const Icon(Icons.access_time,
+                          color: Colors.white38, size: 14),
+                      const SizedBox(width: 8),
+                      Expanded(child: Text(_statusMsg,
+                          style: const TextStyle(
+                              color: Colors.white54, fontSize: 12))),
+                    ]),
+                  ),
+
+                  // Baseline card with dynamic thresholds
+                  _baselineCard(),
+
+                  // Burnout result
+                  _infoCard(
+                    title: "Today's Burnout Risk",
+                    value: todayScore != null ? todayLevel : '--',
+                    icon: Icons.health_and_safety_outlined,
+                    valueColor: todayScore != null
+                        ? _levelColor(todayLevel) : null,
+                  ),
+                  _infoCard(
+                    title: 'Burnout Score  (0 – 1)',
+                    value: todayScore?.toStringAsFixed(2) ?? '--',
+                    icon: Icons.show_chart,
+                    valueColor: todayScore != null
+                        ? _levelColor(todayLevel) : null,
+                  ),
+
+                  // LIVE screen time — highlighted card
+                  _liveScreenTimeCard(),
+
+                  // App switches
+                  _infoCard(
+                    title: 'App Switches / hr',
+                    value: today != null
+                        ? today.appSwitchesPerHour.toStringAsFixed(1)
+                        : '--',
+                    subtitle: b != null
+                        ? 'avg: ${b.avgAppSwitches.toStringAsFixed(0)}/hr  '
+                          '· threshold: ${b.thresholdAppSwitches.toStringAsFixed(0)}/hr'
+                        : null,
+                    icon: Icons.swap_horiz_outlined,
+                    valueColor: (today != null && b != null &&
+                            today.appSwitchesPerHour > b.thresholdAppSwitches)
+                        ? Colors.orange : null,
+                  ),
+
+                  // Social usage
+                  _infoCard(
+                    title: 'Social App Usage',
+                    value: today != null
+                        ? '${(today.socialAppRatio * 100).toStringAsFixed(0)}%'
+                        : '--',
+                    subtitle: b != null
+                        ? 'avg: ${(b.avgSocialRatio * 100).toStringAsFixed(0)}%  '
+                          '· threshold: ${(b.thresholdSocialRatio * 100).toStringAsFixed(0)}%'
+                        : null,
+                    icon: Icons.people_outline,
+                    valueColor: (today != null && b != null &&
+                            today.socialAppRatio > b.thresholdSocialRatio)
+                        ? Colors.orange : null,
+                  ),
+
+                  // Work usage
+                  _infoCard(
+                    title: 'Work App Usage',
+                    value: today != null
+                        ? '${(today.workAppRatio * 100).toStringAsFixed(0)}%'
+                        : '--',
+                    subtitle: b != null
+                        ? 'avg: ${(b.avgWorkRatio * 100).toStringAsFixed(0)}%'
+                        : null,
+                    icon: Icons.work_outline,
+                  ),
+
+                  const SizedBox(height: 6),
+
+                  // Deviation alerts
+                  if (alerts.isNotEmpty)
+                    Container(
+                      margin: const EdgeInsets.only(bottom: 14),
+                      padding: const EdgeInsets.all(14),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF2A1A0A),
+                        borderRadius: BorderRadius.circular(14),
+                        border: Border.all(
+                            color: Colors.orange.withOpacity(0.4)),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Row(children: [
+                            Icon(Icons.warning_amber_outlined,
+                                color: Colors.orange, size: 18),
+                            SizedBox(width: 8),
+                            Text('Deviation from Your Normal',
+                                style: TextStyle(
+                                    color: Colors.orange,
+                                    fontWeight: FontWeight.w700)),
+                          ]),
+                          const SizedBox(height: 10),
+                          ...alerts.map((a) => Padding(
+                                padding: const EdgeInsets.only(bottom: 5),
+                                child: Text(a,
+                                    style: const TextStyle(
+                                        color: Colors.white70,
+                                        fontSize: 13)),
+                              )),
+                        ],
+                      ),
+                    ),
+
+                  // Charts
+                  _lineChart(
+                    title: 'Burnout Score Trend',
+                    spots: scoreSpots,
+                    maxY: 1.0,
+                    color: Colors.deepOrangeAccent,
+                  ),
+                  const SizedBox(height: 14),
+                  _lineChart(
+                    title: 'Screen Time (hours)',
+                    spots: screenSpots,
+                    maxY: 16,
+                    color: const Color(0xFF8A5CE6),
+                    thresholdY: b?.thresholdScreenTime,
+                    avgY: b?.avgScreenTime,
+                  ),
+                  const SizedBox(height: 14),
+                  _lineChart(
+                    title: 'App Switches / hr',
+                    spots: switchSpots,
+                    maxY: 80,
+                    color: Colors.tealAccent,
+                    thresholdY: b?.thresholdAppSwitches,
+                    avgY: b?.avgAppSwitches,
+                  ),
+                  const SizedBox(height: 14),
+                  _lineChart(
+                    title: 'Social App Usage',
+                    spots: socialSpots,
+                    maxY: 1.0,
+                    color: Colors.pinkAccent,
+                    thresholdY: b?.thresholdSocialRatio,
+                    avgY: b?.avgSocialRatio,
+                  ),
+                  const SizedBox(height: 30),
                 ],
               ),
             ),
-          ],
-
-          // Charts
-          _lineChart(
-            title: 'Burnout Score Trend',
-            spots: scoreSpots,
-            maxY: 1.0,
-            color: Colors.deepOrangeAccent,
-          ),
-          const SizedBox(height: 14),
-          _lineChart(
-            title: 'Screen Time Trend (hours)',
-            spots: screenSpots,
-            maxY: 16,
-            color: const Color(0xFF8A5CE6),
-          ),
-          const SizedBox(height: 14),
-          _lineChart(
-            title: 'Social App Usage Trend',
-            spots: socialSpots,
-            maxY: 1.0,
-            color: Colors.pinkAccent,
-          ),
-          const SizedBox(height: 30),
-        ]),
-      ),
     );
   }
 }
