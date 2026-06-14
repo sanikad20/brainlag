@@ -13,19 +13,20 @@ import java.util.Calendar
 
 class MainActivity : FlutterActivity() {
 
-    private val CHANNEL = "brainlag/usage_access"
-    private val PREFS   = "brainlag_prefs"
+    private val CHANNEL          = "brainlag/usage_access"
+    private val PREFS            = "brainlag_prefs"
     private val KEY_INSTALL_DATE = "install_date_ms"
 
-    // ── App categories ────────────────────────────────────────────────────────
+    // ── Social apps ───────────────────────────────────────────────────────────
     private val socialApps = setOf(
         "com.instagram.android", "com.facebook.katana", "com.twitter.android",
         "com.zhiliaoapp.musically", "com.snapchat.android", "com.reddit.frontpage",
         "com.whatsapp", "org.telegram.messenger", "com.discord",
         "com.facebook.orca", "com.linkedin.android", "com.pinterest",
-        "com.tumblr", "com.sharechat.app", "com.moj.app",
-        "com.roposo.android", "com.josh.short.video.status.app",
+        "com.sharechat.app", "com.moj.app", "com.josh.short.video.status.app",
     )
+
+    // ── Work/productivity apps ────────────────────────────────────────────────
     private val workApps = setOf(
         "com.google.android.gm", "com.microsoft.office.outlook",
         "com.Slack", "us.zoom.videomeetings", "com.microsoft.teams",
@@ -37,6 +38,8 @@ class MainActivity : FlutterActivity() {
         "com.google.android.apps.tasks", "com.todoist.android.Todoist",
         "com.evernote", "com.clickup.tasks",
     )
+
+    // ── Entertainment apps ────────────────────────────────────────────────────
     private val entertainmentApps = setOf(
         "com.google.android.youtube", "com.netflix.mediaclient",
         "com.amazon.avod.thirdpartyclient", "com.hotstar.android",
@@ -45,29 +48,41 @@ class MainActivity : FlutterActivity() {
         "in.startv.hotstar", "com.mx.player",
         "com.jio.media.jiocinema", "tv.twitch.android.app",
     )
+
+    // ── Wellness apps ─────────────────────────────────────────────────────────
     private val wellnessApps = setOf(
         "com.headspace.android", "com.calm.android", "com.strava",
         "com.fitbit.FitbitMobile", "com.samsung.android.shealth",
         "com.google.android.apps.fitness", "com.nike.plusgps",
-        "com.adidas.runtastic",
     )
+
+    // ── System packages to exclude from screen time ───────────────────────────
     private val excludePackages = setOf(
-        "com.android.systemui", "com.android.launcher", "com.android.launcher3",
+        "com.android.systemui",
+        "com.android.launcher", "com.android.launcher2", "com.android.launcher3",
         "com.miui.home", "com.sec.android.app.launcher",
         "com.oneplus.launcher", "com.google.android.apps.nexuslauncher",
-        "com.huawei.android.launcher", "com.oppo.launcher", "com.vivo.launcher",
-        "com.android.settings", "com.google.android.inputmethod.latin",
-        "com.samsung.android.inputmethod", "android", "com.android.phone",
-        "com.google.android.gms", "com.google.android.gsf",
-        "com.android.vending", "com.google.android.packageinstaller",
-        "com.android.systemui", "com.android.keyguard",
+        "com.huawei.android.launcher", "com.oppo.launcher",
+        "com.vivo.launcher", "com.realme.launcher",
+        "com.android.settings",
+        "com.google.android.inputmethod.latin",
+        "com.samsung.android.inputmethod",
+        "com.google.android.gms",
+        "com.google.android.gsf",
+        "android",
+        "com.android.phone",
+        "com.android.vending",           // Play Store
+        "com.google.android.packageinstaller",
+        "com.android.keyguard",
+        "com.google.android.setupwizard",
+        "com.android.permissioncontroller",
     )
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
 
-        // Save install date on first launch
-        saveInstallDateIfFirst()
+        // Record install date on first launch
+        recordInstallDate()
 
         MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger, CHANNEL
@@ -82,46 +97,37 @@ class MainActivity : FlutterActivity() {
                     result.success(true)
                 }
 
-                // Returns install date as milliseconds since epoch
                 "getInstallDate" ->
                     result.success(getInstallDate())
 
-                // Single day usage
+                // Single day — daysAgo: 0 = today, 1 = yesterday
                 "getDayUsage" -> {
-                    val daysAgo = call.argument<Int>("daysAgo") ?: 0
                     if (!hasUsagePermission()) {
-                        result.error("NO_PERMISSION", "Usage access not granted", null)
+                        result.error("NO_PERMISSION", "Grant usage access", null)
                         return@setMethodCallHandler
                     }
-                    result.success(getDayUsageData(daysAgo))
+                    val daysAgo = call.argument<Int>("daysAgo") ?: 0
+                    result.success(getDayUsage(daysAgo))
                 }
 
-                // Historical usage from install date (up to maxDays)
+                // Last N days from Digital Wellbeing (ignores install date)
                 "getHistoricalUsage" -> {
-                    val maxDays = call.argument<Int>("days") ?: 14
                     if (!hasUsagePermission()) {
-                        result.error("NO_PERMISSION", "Usage access not granted", null)
+                        result.error("NO_PERMISSION", "Grant usage access", null)
                         return@setMethodCallHandler
                     }
-
-                    // Only fetch days since app was installed
-                    val installMs   = getInstallDate()
-                    val nowMs       = System.currentTimeMillis()
-                    val msPerDay    = 24L * 60 * 60 * 1000
-                    val daysSinceInstall = ((nowMs - installMs) / msPerDay).toInt() + 1
-                    val daysToFetch = minOf(maxDays, daysSinceInstall)
-
-                    val history = (0 until daysToFetch).map { getDayUsageData(it) }
+                    val days    = call.argument<Int>("days") ?: 7
+                    val history = (0 until days).map { getDayUsage(it) }
                     result.success(history)
                 }
 
-                // Today's real-time screen time (live, not end-of-day)
+                // Live screen time for today (real-time)
                 "getTodayScreenTime" -> {
                     if (!hasUsagePermission()) {
-                        result.error("NO_PERMISSION", "Usage access not granted", null)
+                        result.error("NO_PERMISSION", "Grant usage access", null)
                         return@setMethodCallHandler
                     }
-                    result.success(getTodayScreenTimeHours())
+                    result.success(getTodayLiveScreenTime())
                 }
 
                 else -> result.notImplemented()
@@ -129,13 +135,11 @@ class MainActivity : FlutterActivity() {
         }
     }
 
-    // ── Save install date once ────────────────────────────────────────────────
-    private fun saveInstallDateIfFirst() {
+    // ── Record install date ───────────────────────────────────────────────────
+    private fun recordInstallDate() {
         val prefs = getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         if (!prefs.contains(KEY_INSTALL_DATE)) {
-            prefs.edit()
-                .putLong(KEY_INSTALL_DATE, System.currentTimeMillis())
-                .apply()
+            prefs.edit().putLong(KEY_INSTALL_DATE, System.currentTimeMillis()).apply()
         }
     }
 
@@ -144,65 +148,107 @@ class MainActivity : FlutterActivity() {
         return prefs.getLong(KEY_INSTALL_DATE, System.currentTimeMillis())
     }
 
-    // ── Permission ────────────────────────────────────────────────────────────
+    // ── Permission check ──────────────────────────────────────────────────────
     private fun hasUsagePermission(): Boolean {
-        val usm = getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
-        val now = System.currentTimeMillis()
-        val stats = usm.queryUsageStats(
-            UsageStatsManager.INTERVAL_DAILY,
-            now - 1000L * 60 * 60 * 24,
-            now
-        )
-        return stats != null && stats.isNotEmpty()
+        val usm  = getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
+        val now  = System.currentTimeMillis()
+        val list = usm.queryUsageStats(
+            UsageStatsManager.INTERVAL_DAILY, now - 86_400_000L, now)
+        return list != null && list.isNotEmpty()
     }
 
-    // ── Today's live screen time ───────────────────────────────────────────────
-    private fun getTodayScreenTimeHours(): Double {
-        val usm = getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
-        val cal = Calendar.getInstance()
-        cal.set(Calendar.HOUR_OF_DAY, 0)
-        cal.set(Calendar.MINUTE, 0)
-        cal.set(Calendar.SECOND, 0)
-        cal.set(Calendar.MILLISECOND, 0)
-        val startOfDay = cal.timeInMillis
-        val now        = System.currentTimeMillis()
+    // ── Live today screen time ────────────────────────────────────────────────
+// ── Live today screen time ────────────────────────────────────────────────
+// Uses UsageEvents to closely match Digital Wellbeing
+    private fun getTodayLiveScreenTime(): Double {
 
-        val stats = usm.queryUsageStats(
-            UsageStatsManager.INTERVAL_DAILY, startOfDay, now)
+        val usm = getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
+
+        val cal = Calendar.getInstance().apply {
+            set(Calendar.HOUR_OF_DAY, 0)
+            set(Calendar.MINUTE, 0)
+            set(Calendar.SECOND, 0)
+            set(Calendar.MILLISECOND, 0)
+        }
+
+        val startOfDay = cal.timeInMillis
+        val now = System.currentTimeMillis()
 
         var totalMs = 0L
-        stats?.forEach { stat ->
-            val pkg = stat.packageName
-            if (stat.totalTimeInForeground > 0 && pkg !in excludePackages) {
-                totalMs += stat.totalTimeInForeground
+        var currentPkg: String? = null
+        var foregroundStart = 0L
+
+        val events = usm.queryEvents(startOfDay, now)
+        val event = UsageEvents.Event()
+
+        while (events.hasNextEvent()) {
+            events.getNextEvent(event)
+
+            when (event.eventType) {
+
+                UsageEvents.Event.MOVE_TO_FOREGROUND -> {
+
+                // Close previous app session if any
+                    if (currentPkg != null && foregroundStart > 0) {
+                        totalMs += event.timeStamp - foregroundStart
+                    }
+
+                    if (event.packageName !in excludePackages) {
+                        currentPkg = event.packageName
+                        foregroundStart = event.timeStamp
+                    } else {
+                        currentPkg = null
+                        foregroundStart = 0L
+                    }
+                }
+
+                UsageEvents.Event.MOVE_TO_BACKGROUND -> {
+
+                    if (event.packageName == currentPkg &&
+                        foregroundStart > 0
+                    ) {
+
+                        totalMs += event.timeStamp - foregroundStart
+
+                        currentPkg = null
+                        foregroundStart = 0L
+                    }
+                }
             }
         }
-        return totalMs / 3_600_000.0
-    }
 
-    // ── Core: one day's usage data ────────────────────────────────────────────
-    private fun getDayUsageData(daysAgo: Int): Map<String, Any> {
-        val usm = getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
-
-        val cal = Calendar.getInstance()
-        cal.add(Calendar.DAY_OF_YEAR, -daysAgo)
-        cal.set(Calendar.HOUR_OF_DAY, 0)
-        cal.set(Calendar.MINUTE, 0)
-        cal.set(Calendar.SECOND, 0)
-        cal.set(Calendar.MILLISECOND, 0)
-        val startTime = cal.timeInMillis
-
-        val endTime = if (daysAgo == 0) {
-            System.currentTimeMillis()
-        } else {
-            val c2 = cal.clone() as Calendar
-            c2.add(Calendar.DAY_OF_YEAR, 1)
-            c2.timeInMillis
+    // Handle app currently in foreground
+        if (currentPkg != null && foregroundStart > 0) {
+            totalMs += now - foregroundStart
         }
 
-        // Foreground time per app
+        return Math.round(totalMs / 3_600_000.0 * 10.0) / 10.0
+    }
+
+    // ── Core: one calendar day's data ─────────────────────────────────────────
+    private fun getDayUsage(daysAgo: Int): Map<String, Any> {
+        val usm = getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
+
+        // ── Time range: midnight → midnight of that day ───────────────────────
+        val startCal = Calendar.getInstance().apply {
+            add(Calendar.DAY_OF_YEAR, -daysAgo)
+            set(Calendar.HOUR_OF_DAY, 0)
+            set(Calendar.MINUTE, 0)
+            set(Calendar.SECOND, 0)
+            set(Calendar.MILLISECOND, 0)
+        }
+        val startMs = startCal.timeInMillis
+        val endMs   = if (daysAgo == 0) {
+            System.currentTimeMillis()          // today: up to now
+        } else {
+            startCal.apply {
+                add(Calendar.DAY_OF_YEAR, 1)
+            }.timeInMillis                      // past day: full 24h
+        }
+
+        // ── Foreground time per app ────────────────────────────────────────────
         val stats = usm.queryUsageStats(
-            UsageStatsManager.INTERVAL_DAILY, startTime, endTime)
+            UsageStatsManager.INTERVAL_DAILY, startMs, endMs)
 
         var totalMs     = 0L
         var socialMs    = 0L
@@ -214,6 +260,7 @@ class MainActivity : FlutterActivity() {
         stats?.forEach { stat ->
             val pkg = stat.packageName
             val ms  = stat.totalTimeInForeground
+
             if (ms <= 0 || pkg in excludePackages) return@forEach
 
             totalMs += ms
@@ -227,40 +274,57 @@ class MainActivity : FlutterActivity() {
             }
         }
 
-        // App switches from UsageEvents
+        // ── App switches via UsageEvents ───────────────────────────────────────
+        // Count MOVE_TO_FOREGROUND events — each unique package switch = 1 switch
         var appSwitches       = 0
-        var lastForegroundPkg = ""
+        var lastPkg           = ""
+
         try {
-            val events = usm.queryEvents(startTime, endTime)
+            val events = usm.queryEvents(startMs, endMs)
             val event  = UsageEvents.Event()
+
             while (events.hasNextEvent()) {
                 events.getNextEvent(event)
                 if (event.eventType == UsageEvents.Event.MOVE_TO_FOREGROUND) {
                     val pkg = event.packageName
-                    if (pkg !in excludePackages && pkg != lastForegroundPkg) {
+                    // Only count if different app and not a system package
+                    if (pkg !in excludePackages && pkg != lastPkg) {
                         appSwitches++
-                        lastForegroundPkg = pkg
+                        lastPkg = pkg
                     }
                 }
             }
         } catch (e: Exception) {
+            // Fallback: estimate from unique apps
             appSwitches = uniqueApps.size * 3
         }
 
-        val totalHours      = totalMs / 3_600_000.0
+        // ── Compute ratios ─────────────────────────────────────────────────────
+        val screenHours     = Math.round(totalMs / 3_600_000.0 * 10.0) / 10.0
         val safe            = if (totalMs > 0) totalMs.toDouble() else 1.0
-        val hoursInDay      = if (totalHours > 0) totalHours else 1.0
-        val switchesPerHour = appSwitches.toDouble() / hoursInDay
+        val hoursForRate    = if (screenHours > 0) screenHours else 1.0
+
+        // App switches per hour — rounded to whole number
+        val switchesPerHour = Math.round(appSwitches.toDouble() / hoursForRate).toInt()
+
+        // Date label for this day
+        val dateCal = Calendar.getInstance().apply {
+            add(Calendar.DAY_OF_YEAR, -daysAgo)
+        }
+        val dateLabel = "${dateCal.get(Calendar.DAY_OF_MONTH)}/" +
+                        "${dateCal.get(Calendar.MONTH) + 1}"
 
         return mapOf(
             "daysAgo"            to daysAgo,
-            "screenTimeHours"    to totalHours,
-            "appSwitchesPerHour" to switchesPerHour,
+            "dateLabel"          to dateLabel,
+            "screenTimeHours"    to screenHours,
+            "appSwitchesPerHour" to switchesPerHour,   // whole number
+            "totalAppSwitches"   to appSwitches,        // raw count
             "uniqueAppsPerDay"   to uniqueApps.size,
-            "socialAppRatio"     to (socialMs    / safe),
-            "workAppRatio"       to (workMs       / safe),
-            "entertainmentRatio" to (entertainMs  / safe),
-            "wellnessRatio"      to (wellnessMs   / safe),
+            "socialAppRatio"     to Math.round(socialMs    / safe * 1000.0) / 1000.0,
+            "workAppRatio"       to Math.round(workMs       / safe * 1000.0) / 1000.0,
+            "entertainmentRatio" to Math.round(entertainMs  / safe * 1000.0) / 1000.0,
+            "wellnessRatio"      to Math.round(wellnessMs   / safe * 1000.0) / 1000.0,
         )
     }
 }
