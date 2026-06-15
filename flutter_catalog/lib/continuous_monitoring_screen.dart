@@ -100,24 +100,41 @@ class _ContinuousMonitoringScreenState
 
       // Predict for consecutive day pairs
       _scores.clear();
-      _levels.clear();
+_levels.clear();
 
-      for (int i = 0; i < history.length - 1; i++) {
-        final newer = history[i];
-        final older = history[i + 1];
-        if (!newer.hasData || !older.hasData) continue;
+if (history.length >= 7) {
 
-        try {
-          final result = await ApiService.instance.predictTwoDay(
-            day1: _toApi(older, baseline),
-            day2: _toApi(newer, baseline),
-          );
-          if (mounted) setState(() {
-            _scores[i] = result.score;
-            _levels[i] = result.level;
-          });
-        } catch (_) {}
-      }
+  try {
+
+    final days = history
+        .take(7)
+        .map((d) =>
+            _toApi(d, baseline))
+        .toList();
+
+    final result =
+        await ApiService.instance
+            .predictSevenDay(
+                days: days);
+
+    if (mounted) {
+
+      setState(() {
+
+        _scores[0] =
+            result.score;
+
+        _levels[0] =
+            result.level;
+      });
+    }
+
+  } catch (e) {
+
+    debugPrint(
+        'Prediction error: $e');
+  }
+}
 
       setState(() => _statusMsg =
           'Updated ${_fmt(DateTime.now())}  · ${history.length} days');

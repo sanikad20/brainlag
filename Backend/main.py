@@ -72,10 +72,8 @@ class DayInput(BaseModel):
     missed_call_ratio: float
     sms_count: float
 
-class TwoDayInput(BaseModel):
-    day1: DayInput
-    day2: DayInput
-
+class SevenDayInput(BaseModel):
+    days: list[DayInput]
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Manual PyTorch model — UNCHANGED
@@ -111,13 +109,35 @@ manual_model.eval()
 _saved = tf.saved_model.load("burnout_lstm_savedmodel")
 _infer = _saved.signatures["serving_default"]
 
-# Find the output key (usually "burnout_score" or "output_0")
+print("\n===== SAVEDMODEL SIGNATURES =====")
+print("Input Signature:")
+print(_infer.structured_input_signature)
+
+print("\nOutput Signature:")
+print(_infer.structured_outputs)
+
 _output_key = list(_infer.structured_outputs.keys())[0]
-print(f"LSTM model loaded ✓  |  output key: '{_output_key}'")
+
+print(f"\nLSTM model loaded ✓")
+print(f"Output key: {_output_key}")
+print("=================================\n")
 
 lstm_scaler   = joblib.load("lstm_scaler.pkl")
 lstm_baseline = joblib.load("baseline_stats.pkl")
-lstm_feat_cols = joblib.load("lstm_feature_cols.pkl")  # 23-feature file from LSTM training
+lstm_feat_cols = joblib.load("lstm_feature_cols.pkl") 
+
+
+print("\n===== BASELINE DEBUG =====")
+print("Baseline type:", type(lstm_baseline))
+print("Baseline keys:", lstm_baseline.keys())
+
+print("\nscreen_time_hours value:")
+print(lstm_baseline["screen_time_hours"])
+
+print("\nType:")
+print(type(lstm_baseline["screen_time_hours"]))
+
+print("==========================\n") # 23-feature file from LSTM training
 
 LSTM_FEATURE_COLS = [
     "screen_time_hours", "app_switches_per_hour", "unique_apps_per_day",
@@ -147,21 +167,57 @@ def get_burnout_level_lstm(score: float) -> str:
 
 def build_lstm_row(d: DayInput, baseline: dict) -> list:
     r = d.model_dump()
-    r["weighted_app_burnout"] = float(np.clip(
-        r["social_app_ratio"]    * 0.85
-      + r["entertainment_ratio"] * 0.60
-      - r["work_app_ratio"]      * 0.25
-      - r["wellness_ratio"]      * 0.40, -1, 1))
-    r["screen_time_delta"]   = r["screen_time_hours"]     - baseline["screen_time_hours"][0]
-    r["app_switches_delta"]  = r["app_switches_per_hour"] - baseline["app_switches_per_hour"][0]
-    r["social_ratio_delta"]  = r["social_app_ratio"]      - baseline["social_app_ratio"][0]
-    r["work_ratio_delta"]    = r["work_app_ratio"]        - baseline["work_app_ratio"][0]
-    r["sleep_delta"]         = r["sleep_hours"]           - baseline["sleep_hours"][0]
-    r["screen_time_zscore"]  = r["screen_time_delta"]     / baseline["screen_time_hours"][1]
-    r["app_switches_zscore"] = r["app_switches_delta"]    / baseline["app_switches_per_hour"][1]
-    r["social_ratio_zscore"] = r["social_ratio_delta"]    / baseline["social_app_ratio"][1]
-    return [r[c] for c in LSTM_FEATURE_COLS]
 
+    r["weighted_app_burnout"] = float(np.clip(
+        r["social_app_ratio"] * 0.85
+        + r["entertainment_ratio"] * 0.60
+        - r["work_app_ratio"] * 0.25
+        - r["wellness_ratio"] * 0.40,
+        -1,
+        1
+    ))
+
+    r["screen_time_delta"] = (
+        r["screen_time_hours"]
+        - baseline["screen_time_hours"]["mean"]
+    )
+
+    r["app_switches_delta"] = (
+        r["app_switches_per_hour"]
+        - baseline["app_switches_per_hour"]["mean"]
+    )
+
+    r["social_ratio_delta"] = (
+        r["social_app_ratio"]
+        - baseline["social_app_ratio"]["mean"]
+    )
+
+    r["work_ratio_delta"] = (
+        r["work_app_ratio"]
+        - baseline["work_app_ratio"]["mean"]
+    )
+
+    r["sleep_delta"] = (
+        r["sleep_hours"]
+        - baseline["sleep_hours"]["mean"]
+    )
+
+    r["screen_time_zscore"] = (
+        r["screen_time_delta"]
+        / baseline["screen_time_hours"]["std"]
+    )
+
+    r["app_switches_zscore"] = (
+        r["app_switches_delta"]
+        / baseline["app_switches_per_hour"]["std"]
+    )
+
+    r["social_ratio_zscore"] = (
+        r["social_ratio_delta"]
+        / baseline["social_app_ratio"]["std"]
+    )
+
+    return [r[c] for c in LSTM_FEATURE_COLS]
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Routes
@@ -211,21 +267,89 @@ def predict(data: BurnoutInput):
 
 # Continuous monitoring — SavedModel inference (no Keras version issues)
 @app.post("/predict_lstm")
-def predict_lstm(data: TwoDayInput):
-    row1 = build_lstm_row(data.day1, lstm_baseline)
-    row2 = build_lstm_row(data.day2, lstm_baseline)
+def predict_lstm(data: SevenDayInput):
+    try:
+        print("\n========== PREDICTION START ==========")
 
-    seq        = np.array([[row1, row2]], dtype=np.float32)  # (1, 2, 23)
-    N, S, F    = seq.shape
-    seq_scaled = lstm_scaler.transform(seq.reshape(N*S, F)).reshape(N, S, F)
+        if len(data.days) != 7:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Exactly 7 days required. Received {len(data.days)}",
+            )
 
-    # Run inference via SavedModel signature
-    input_tensor = tf.constant(seq_scaled, dtype=tf.float32)
-    result       = _infer(sequence_input=input_tensor)
-    score        = float(result[_output_key].numpy()[0][0])
-    score        = float(np.clip(score, 0.0, 1.0))
+        print("Days received:", len(data.days))
 
-    return {
-        "prediction":   round(score, 4),
-        "stress_level": get_burnout_level_lstm(score),
-    }
+        rows = [
+            build_lstm_row(day, lstm_baseline)
+            for day in data.days
+        ]
+
+        print("Rows built:", len(rows))
+        print("Features:", len(rows[0]))
+
+        # DEBUG: print exactly what the LSTM sees
+        print("\n========== FEATURES SENT TO LSTM ==========")
+
+        for i, day in enumerate(rows):
+            print(f"\n----- Day {i + 1} -----")
+
+            for feature, value in zip(LSTM_FEATURE_COLS, day):
+                print(f"{feature}: {value}")
+
+        print("===========================================\n")
+
+        seq = np.array([rows], dtype=np.float32)
+
+        print("Raw shape:", seq.shape)
+
+        N, S, F = seq.shape
+
+        seq_scaled = lstm_scaler.transform(
+            seq.reshape(N * S, F)
+        ).reshape(N, S, F)
+
+        print("Scaled shape:", seq_scaled.shape)
+
+        input_tensor = tf.constant(
+            seq_scaled,
+            dtype=tf.float32,
+        )
+
+        print("Running inference...")
+
+        result = _infer(
+            weekly_features=input_tensor
+        )
+
+        print("Inference completed")
+        score = float(
+            result[_output_key].numpy()[0][0]
+        )
+
+        score = float(
+            np.clip(score, 0.0, 1.0)
+        )
+
+        print("Prediction:", score)
+
+        print("========== END ==========\n")
+
+        return {
+            "prediction": round(score, 4),
+            "stress_level": get_burnout_level_lstm(score),
+        }
+
+    except HTTPException:
+        raise
+
+    except Exception as e:
+        import traceback
+
+        print("\n========== ERROR ==========")
+        traceback.print_exc()
+        print("===========================\n")
+
+        raise HTTPException(
+            status_code=500,
+            detail=str(e),
+        )
