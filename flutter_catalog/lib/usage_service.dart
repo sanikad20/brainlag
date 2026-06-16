@@ -159,7 +159,7 @@ class UsageService {
 
     // Always fetch 7 days — Digital Wellbeing has this data even before install
     final raw = await _ch.invokeMethod<List>(
-        'getHistoricalUsage', {'days': 7});
+        'getHistoricalUsage', {'days': 8});
 
     final all = raw!.map((e) => DayUsageRaw.fromMap(e as Map)).toList();
 

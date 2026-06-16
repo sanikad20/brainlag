@@ -76,6 +76,11 @@ class MainActivity : FlutterActivity() {
         "com.android.keyguard",
         "com.google.android.setupwizard",
         "com.android.permissioncontroller",
+        "com.android.camera",
+        "com.miui.gallery",
+        "com.google.android.apps.photos",
+        "com.google.android.googlequicksearchbox"
+        
     )
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
