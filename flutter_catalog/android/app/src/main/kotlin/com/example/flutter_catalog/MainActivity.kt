@@ -80,7 +80,7 @@ class MainActivity : FlutterActivity() {
         "com.miui.gallery",
         "com.google.android.apps.photos",
         "com.google.android.googlequicksearchbox"
-        
+
     )
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
@@ -162,38 +162,33 @@ class MainActivity : FlutterActivity() {
         return list != null && list.isNotEmpty()
     }
 
-    // ── Live today screen time ────────────────────────────────────────────────
-// ── Live today screen time ────────────────────────────────────────────────
-// Uses UsageEvents to closely match Digital Wellbeing
-    private fun getTodayLiveScreenTime(): Double {
-
+    // ── Reusable: event-based foreground time calculator ─────────────────────
+    // Uses UsageEvents (MOVE_TO_FOREGROUND / MOVE_TO_BACKGROUND) instead of
+    // UsageStatsManager.queryUsageStats()/totalTimeInForeground, which
+    // overcounts on Samsung devices (it sums per-bucket foreground time and
+    // can double count sessions that span bucket boundaries or get resumed
+    // from "recents" without a fresh foreground event).
+    //
+    // This mirrors getTodayLiveScreenTime()'s logic so historical days are
+    // computed the same way as "today", and should closely match Samsung's
+    // own Digital Wellbeing numbers.
+    private fun calculateScreenTimeFromEvents(startMs: Long, endMs: Long): Long {
         val usm = getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
-
-        val cal = Calendar.getInstance().apply {
-            set(Calendar.HOUR_OF_DAY, 0)
-            set(Calendar.MINUTE, 0)
-            set(Calendar.SECOND, 0)
-            set(Calendar.MILLISECOND, 0)
-        }
-
-        val startOfDay = cal.timeInMillis
-        val now = System.currentTimeMillis()
 
         var totalMs = 0L
         var currentPkg: String? = null
         var foregroundStart = 0L
 
-        val events = usm.queryEvents(startOfDay, now)
+        val events = usm.queryEvents(startMs, endMs)
         val event = UsageEvents.Event()
 
         while (events.hasNextEvent()) {
             events.getNextEvent(event)
 
             when (event.eventType) {
-
                 UsageEvents.Event.MOVE_TO_FOREGROUND -> {
-
-                // Close previous app session if any
+                    // Close previous app session if one was still open
+                    // (handles missed/out-of-order BACKGROUND events)
                     if (currentPkg != null && foregroundStart > 0) {
                         totalMs += event.timeStamp - foregroundStart
                     }
@@ -208,13 +203,8 @@ class MainActivity : FlutterActivity() {
                 }
 
                 UsageEvents.Event.MOVE_TO_BACKGROUND -> {
-
-                    if (event.packageName == currentPkg &&
-                        foregroundStart > 0
-                    ) {
-
+                    if (event.packageName == currentPkg && foregroundStart > 0) {
                         totalMs += event.timeStamp - foregroundStart
-
                         currentPkg = null
                         foregroundStart = 0L
                     }
@@ -222,10 +212,29 @@ class MainActivity : FlutterActivity() {
             }
         }
 
-    // Handle app currently in foreground
+        // Handle an app that was still in the foreground when the interval
+        // ended (e.g. "today" cut off at "now", or device usage spanning
+        // past the end of the queried day)
         if (currentPkg != null && foregroundStart > 0) {
-            totalMs += now - foregroundStart
+            totalMs += endMs - foregroundStart
         }
+
+        return totalMs
+    }
+
+    // ── Live today screen time ────────────────────────────────────────────────
+    // Uses UsageEvents to closely match Digital Wellbeing
+    private fun getTodayLiveScreenTime(): Double {
+        val cal = Calendar.getInstance().apply {
+            set(Calendar.HOUR_OF_DAY, 0)
+            set(Calendar.MINUTE, 0)
+            set(Calendar.SECOND, 0)
+            set(Calendar.MILLISECOND, 0)
+        }
+        val startOfDay = cal.timeInMillis
+        val now = System.currentTimeMillis()
+
+        val totalMs = calculateScreenTimeFromEvents(startOfDay, now)
 
         return Math.round(totalMs / 3_600_000.0 * 10.0) / 10.0
     }
@@ -251,11 +260,15 @@ class MainActivity : FlutterActivity() {
             }.timeInMillis                      // past day: full 24h
         }
 
-        // ── Foreground time per app ────────────────────────────────────────────
+        // ── Screen time: event-based (matches Digital Wellbeing) ──────────────
+        val totalMs = calculateScreenTimeFromEvents(startMs, endMs)
+
+        // ── Category breakdown + unique apps: still from queryUsageStats() ─────
+        // (totalTimeInForeground is NOT used for the overall total anymore —
+        // only as a relative weighting signal to bucket time into categories)
         val stats = usm.queryUsageStats(
             UsageStatsManager.INTERVAL_DAILY, startMs, endMs)
 
-        var totalMs     = 0L
         var socialMs    = 0L
         var workMs      = 0L
         var entertainMs = 0L
@@ -268,7 +281,6 @@ class MainActivity : FlutterActivity() {
 
             if (ms <= 0 || pkg in excludePackages) return@forEach
 
-            totalMs += ms
             uniqueApps.add(pkg)
 
             when (pkg) {
@@ -281,13 +293,11 @@ class MainActivity : FlutterActivity() {
 
         // ── App switches via UsageEvents ───────────────────────────────────────
         // Count MOVE_TO_FOREGROUND events — each unique package switch = 1 switch
-        var appSwitches       = 0
-        var lastPkg           = ""
-
+        var appSwitches = 0
+        var lastPkg      = ""
         try {
             val events = usm.queryEvents(startMs, endMs)
             val event  = UsageEvents.Event()
-
             while (events.hasNextEvent()) {
                 events.getNextEvent(event)
                 if (event.eventType == UsageEvents.Event.MOVE_TO_FOREGROUND) {
@@ -306,6 +316,9 @@ class MainActivity : FlutterActivity() {
 
         // ── Compute ratios ─────────────────────────────────────────────────────
         val screenHours     = Math.round(totalMs / 3_600_000.0 * 10.0) / 10.0
+        // Ratios are still relative to the SAME totalMs (event-based total),
+        // not to the sum of category buckets, so they stay internally consistent
+        // even though category buckets come from a different (legacy) source.
         val safe            = if (totalMs > 0) totalMs.toDouble() else 1.0
         val hoursForRate    = if (screenHours > 0) screenHours else 1.0
 
@@ -318,6 +331,9 @@ class MainActivity : FlutterActivity() {
         }
         val dateLabel = "${dateCal.get(Calendar.DAY_OF_MONTH)}/" +
                         "${dateCal.get(Calendar.MONTH) + 1}"
+
+        // ── Debug logging ──────────────────────────────────────────────────────
+        println("Day=$daysAgo ScreenHours=$screenHours Switches=$appSwitches Apps=${uniqueApps.size}")
 
         return mapOf(
             "daysAgo"            to daysAgo,
