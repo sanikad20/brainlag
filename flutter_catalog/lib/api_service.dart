@@ -1,7 +1,7 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 
-const String _baseUrl = 'http://10.226.101.235:8000';
+const String _baseUrl = 'http://10.224.180.235:8000';
 
 // ─── Day usage model ──────────────────────────────────────────────────────────
 
@@ -127,16 +127,22 @@ class ApiService {
       throw Exception('predictLSTM needs exactly 7 past days, got ${pastDays.length}');
     }
 
-    final response = await http
-        .post(
-          Uri.parse('$_baseUrl/predict_lstm'),
-          headers: {'Content-Type': 'application/json'},
-          body: jsonEncode({
-            'history': pastDays.map((d) => d.toJson()).toList(),
-            'today':     today.toJson(),
-          }),
-        )
-        .timeout(const Duration(seconds: 15));
+    final body = {
+      'history': pastDays.map((d) => d.toJson()).toList(),
+      'today': today.toJson(),
+    };
+
+    print("REQUEST BODY:");
+    print(jsonEncode(body));
+
+    final response = await http.post(
+      Uri.parse('$_baseUrl/predict_lstm'),
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode(body),
+    );
+
+    print("STATUS = ${response.statusCode}");
+    print("BODY = ${response.body}");
 
     if (response.statusCode == 200) {
       final data = jsonDecode(response.body);
